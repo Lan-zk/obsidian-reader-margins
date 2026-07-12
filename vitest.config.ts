@@ -8,7 +8,10 @@ export default defineConfig({
     setupFiles: ["src/tests/setup.ts"],
   },
   resolve: {
-    alias: { obsidian: resolve(__dirname, "src/tests/mocks/obsidian.ts") },
+    alias: [
+      { find: /^src\//, replacement: resolve(__dirname, "src") + "/" },
+      { find: "obsidian", replacement: resolve(__dirname, "src/tests/mocks/obsidian.ts") },
+    ],
   },
   esbuild: { target: "es2022" },
 });
