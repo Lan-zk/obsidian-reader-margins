@@ -1,3 +1,14 @@
 /* Reader Margins styles. All classes prefixed rm-. */
 .rm-mark-layer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 .rm-mark { position: absolute; pointer-events: none; }
+
+/* Card rails and cards (M-1 tracer) */
+.rm-card-rail { position: absolute; top: 0; bottom: 0; width: clamp(120px, 204px, 220px); pointer-events: auto; }
+.rm-card-rail-left { left: 0; }
+.rm-card-rail-right { right: 0; }
+.rm-card { position: relative; display: flex; gap: 6px; padding: 6px 8px; margin-bottom: 8px;
+  background: var(--background-primary-alt, rgba(0,0,0,0.03)); border: 1px solid var(--background-modifier-border, #ccc);
+  border-radius: 4px; max-height: 240px; overflow-y: auto; }
+.rm-card-strip { width: 3px; flex: 0 0 3px; border-radius: 2px; }
+.rm-card-body { font-size: 12px; color: var(--text-normal); }
+.rm-connector-layer { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
