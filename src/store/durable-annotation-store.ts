@@ -1,0 +1,119 @@
+// src/store/durable-annotation-store.ts
+import { parsePluginData, makeDefaultData, snapshotData, type PluginDataV1, type DataLoadState } from "src/store/plugin-data-schema";
+import { AnnotationIndexes } from "src/store/indexes";
+import { PersistenceCoordinator, type PersistenceStatus } from "src/store/persistence-coordinator";
+import type { AnnotationRecordV1, CreateAnnotationInput, MutationResult, DocumentSignature } from "src/domain/annotation";
+
+export type ChangeEvent = (pdfPath: string, changedIds: string[]) => void;
+
+const LIMITS = { maxAnnotationsPerDoc: 20_000, maxCommentChars: 100_000, maxQuoteChars: 20_000 };
+
+export class DurableAnnotationStore {
+  data: PluginDataV1;
+  isReadonly = false;
+  private indexes = new AnnotationIndexes();
+  private coord: PersistenceCoordinator;
+  private changeListeners = new Set<ChangeEvent>();
+
+  constructor(private saveFn: (data: PluginDataV1) => Promise<void>) {
+    this.data = makeDefaultData();
+    this.coord = new PersistenceCoordinator(saveFn);
+    this.indexes.rebuild(this.data);
+  }
+
+  loadAndValidate(raw: unknown): DataLoadState {
+    const { state, data } = parsePluginData(raw);
+    if (state === "valid" && data) {
+      this.data = data;
+      this.isReadonly = false;
+    } else if (state === "absent") {
+      this.data = makeDefaultData();
+      this.isReadonly = false;
+    } else {
+      // future / invalid / needs-migration: do NOT overwrite (spec §10.5, §14.2)
+      this.isReadonly = true;
+      this.data = makeDefaultData();
+    }
+    this.indexes.rebuild(this.data);
+    return state;
+  }
+
+  onChange(cb: ChangeEvent): () => void { this.changeListeners.add(cb); return () => this.changeListeners.delete(cb); }
+  onStatus(cb: (s: PersistenceStatus) => void): () => void { return this.coord.onStatus(cb); }
+  flushBestEffort(): Promise<void> { return this.coord.flushBestEffort(); }
+  byPage(path: string, page: number): AnnotationRecordV1[] { return this.indexes.byPage(path, page); }
+  byPath(path: string): AnnotationRecordV1[] { return this.indexes.byPath(path); }
+  byId(path: string, id: string): AnnotationRecordV1 | undefined { return this.indexes.byId(path, id); }
+
+  create(path: string, input: CreateAnnotationInput, signature: DocumentSignature): MutationResult {
+    if (this.isReadonly) return { ok: false, reason: "store is read-only" };
+    if (!this.signatureMatches(path, signature)) return { ok: false, reason: "source signature mismatch; refusing to bind annotations" };
+    const doc = this.ensureDoc(path, signature);
+    if (Object.keys(doc.annotations).length >= LIMITS.maxAnnotationsPerDoc) {
+      return { ok: false, reason: "annotation limit reached" };
+    }
+    if (input.comment && input.comment.length > LIMITS.maxCommentChars) return { ok: false, reason: "comment too long" };
+    if (input.anchor.quote.exact.length > LIMITS.maxQuoteChars) return { ok: false, reason: "quote too long" };
+
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const record: AnnotationRecordV1 = {
+      id, revision: 1, type: "text-mark", markStyle: input.markStyle,
+      colorIdSnapshot: input.colorId, colorLabelSnapshot: input.colorLabel, colorValueSnapshot: input.colorValue,
+      comment: input.comment, anchor: input.anchor, createdAt: now, updatedAt: now,
+    };
+    doc.annotations[id] = record;
+    doc.revision++;
+    this.data.stateRevision++;
+    this.commit(path, [id]);
+    return { ok: true, annotation: structuredClone(record), revision: this.data.stateRevision };
+  }
+
+  update(path: string, id: string, patch: Partial<Pick<AnnotationRecordV1, "comment" | "markStyle" | "colorValueSnapshot" | "colorLabelSnapshot" | "colorIdSnapshot">>, baseRevision: number): MutationResult {
+    if (this.isReadonly) return { ok: false, reason: "store is read-only" };
+    const doc = this.data.documents[path];
+    const ann = doc?.annotations[id];
+    if (!ann) return { ok: false, reason: "annotation not found" };
+    if (ann.revision !== baseRevision) return { ok: false, reason: "revision conflict; annotation was modified elsewhere" };
+    Object.assign(ann, patch);
+    ann.revision++;
+    ann.updatedAt = new Date().toISOString();
+    doc.revision++;
+    this.data.stateRevision++;
+    this.commit(path, [id]);
+    return { ok: true, annotation: structuredClone(ann), revision: this.data.stateRevision };
+  }
+
+  delete(path: string, id: string): MutationResult {
+    if (this.isReadonly) return { ok: false, reason: "store is read-only" };
+    const doc = this.data.documents[path];
+    const ann = doc?.annotations[id];
+    if (!ann) return { ok: false, reason: "annotation not found" };
+    delete doc.annotations[id];
+    doc.revision++;
+    this.data.stateRevision++;
+    if (Object.keys(doc.annotations).length === 0) delete this.data.documents[path]; // prune empty (spec §5.1)
+    this.commit(path, [id]);
+    return { ok: true, annotation: structuredClone(ann), revision: this.data.stateRevision };
+  }
+
+  private signatureMatches(path: string, sig: DocumentSignature): boolean {
+    const doc = this.data.documents[path];
+    if (!doc) return true;
+    return doc.sourceSignature.pdfFingerprint === sig.pdfFingerprint &&
+      doc.sourceSignature.numPages === sig.numPages;
+  }
+
+  private ensureDoc(path: string, sig: DocumentSignature) {
+    if (!this.data.documents[path]) {
+      this.data.documents[path] = { documentId: crypto.randomUUID(), sourceSignature: sig, revision: 0, annotations: {} };
+    }
+    return this.data.documents[path];
+  }
+
+  private commit(path: string, ids: string[]) {
+    this.indexes.rebuild(this.data);
+    for (const cb of this.changeListeners) cb(path, ids);
+    this.coord.enqueue(snapshotData(this.data), this.data.stateRevision);
+  }
+}
