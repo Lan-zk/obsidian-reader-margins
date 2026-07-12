@@ -57,3 +57,15 @@ export function findPageEl(h: HostHandles, pageNumber: number): HTMLElement | nu
     `.page[data-page-number="${pageNumber}"]`
   );
 }
+
+// Read PDF fingerprint for sourceSignature (spec §10.2). Private access - defensive.
+export function readPdfFingerprint(h: HostHandles): string | undefined {
+  const fp = (h.obsidianViewer as any)?.pdfDocument?.fingerprint;
+  return typeof fp === "string" && fp.length > 0 ? fp : undefined;
+}
+
+// Read page count from the inner PDF.js viewer.
+export function readPageCount(h: HostHandles): number | undefined {
+  const pc = (h.pdfJsViewer as any)?.pagesCount;
+  return typeof pc === "number" && Number.isFinite(pc) && pc > 0 ? pc : undefined;
+}

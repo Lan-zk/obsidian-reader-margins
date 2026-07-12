@@ -1,15 +1,22 @@
-import { Plugin, WorkspaceLeaf } from "obsidian";
+import { Plugin, WorkspaceLeaf, Notice } from "obsidian";
+import { DurableAnnotationStore } from "src/store/durable-annotation-store";
 import { ViewerSession } from "src/session/viewer-session";
 
 export default class ReaderMarginsPlugin extends Plugin {
+  store!: DurableAnnotationStore;
   private sessions = new Map<WorkspaceLeaf, ViewerSession>();
 
   async onload() {
     await loadPdfJs();
+    this.store = new DurableAnnotationStore(async (data) => { await this.saveData(data); });
+    const state = this.store.loadAndValidate(await this.loadData());
+    if (state === "future" || state === "invalid") {
+      new Notice(`Reader Margins: ${state} data.json; annotations disabled to prevent overwrite.`, 10000);
+    }
     this.registerEvent(this.app.workspace.on("layout-change", () => this.reconcileLeaves()));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.reconcileLeaves()));
     this.app.workspace.iterateAllLeaves((leaf) => this.attachLeaf(leaf));
-    this.register(() => this.destroyAll());
+    this.register(() => { this.destroyAll(); this.store.flushBestEffort(); });
   }
 
   private reconcileLeaves() {
@@ -20,7 +27,7 @@ export default class ReaderMarginsPlugin extends Plugin {
     const view: any = leaf.view;
     if (!view || view.getViewType?.() !== "pdf") return;
     if (this.sessions.has(leaf)) return;
-    const session = new ViewerSession(view, view.file?.path ?? "");
+    const session = new ViewerSession(view, view.file?.path ?? "", this.store);
     this.sessions.set(leaf, session);
     session.attach().catch((e) => console.error("reader-margins attach failed", e));
   }

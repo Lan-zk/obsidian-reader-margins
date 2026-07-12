@@ -1,12 +1,15 @@
 // src/session/viewer-session.ts
 import type { HostHandles, HostCapabilities } from "src/host/host-typings";
-import { probeHostHandles, readCurrentScale, findPageEl } from "src/host/obsidian-pdf-host";
-import { probeCapabilities, coreReady } from "src/host/host-capabilities";
+import { probeHostHandles, readCurrentScale, findPageEl, readPdfFingerprint, readPageCount } from "src/host/obsidian-pdf-host";
+import { probeCapabilities } from "src/host/host-capabilities";
 import { DisposableScope } from "src/session/disposable-scope";
 import { SelectionSnapshotController } from "src/session/selection-snapshot-controller";
-import { drawEphemeralMark, clearMarks, type AnchorRect } from "src/render/mark-renderer";
+import { drawEphemeralMark, clearMarks } from "src/render/mark-renderer";
 import { drawEphemeralCard } from "src/render/annotation-card-rail";
 import { drawEphemeralConnector } from "src/render/connector-renderer";
+import { unionCenter } from "src/domain/pdf-text-anchor";
+import type { DurableAnnotationStore } from "src/store/durable-annotation-store";
+import type { DocumentSignature } from "src/domain/annotation";
 
 export type SessionState = "discovered" | "probing" | "attached" | "degraded" | "disposing" | "disposed";
 
@@ -29,13 +32,13 @@ export class ViewerSession {
   private generation = 0;
   private probeTimer: ReturnType<typeof setTimeout> | null = null;
   private opts: Required<ViewerSessionOptions>;
+  private signature: DocumentSignature | null = null;
 
-  constructor(private view: any, pdfPath: string, opts: ViewerSessionOptions = {}) {
+  constructor(private view: any, pdfPath: string, private store: DurableAnnotationStore, opts: ViewerSessionOptions = {}) {
     this.pdfPath = pdfPath;
     this.opts = { ...DEFAULTS, ...opts } as Required<ViewerSessionOptions>;
   }
 
-  // spec §7.4 attach state machine
   attach(): Promise<void> {
     if (this.state === "attached" || this.state === "degraded") return Promise.resolve();
     this.state = "probing";
@@ -59,6 +62,11 @@ export class ViewerSession {
   private finishAttach(h: HostHandles, gen: number): void {
     this.handles = h;
     this.caps = probeCapabilities(h, { sourceSignature: "verified" });
+    // Resolve sourceSignature (spec §10.2) - best-effort; verified in M-1 smoke gate.
+    const fp = readPdfFingerprint(h);
+    const pc = readPageCount(h);
+    this.signature = fp && pc ? { pdfFingerprint: fp, numPages: pc } : null;
+
     // spec §7.5: register listeners BEFORE scanning existing pages.
     const bus = h.eventBus as any;
     if (bus && typeof bus.on === "function") {
@@ -69,7 +77,6 @@ export class ViewerSession {
       bus.on("textlayerrendered", onTextLayer);
       this.scope.addDispose(() => bus.off?.("textlayerrendered", onTextLayer));
     }
-    // pointerup -> capture selection (spec §8.3)
     const onPointerUp = () => {
       if (!this.handles) return;
       this.sel.capture(`gen${this.generation}`, this.handles.viewerEl.ownerDocument.defaultView!, this.handles.viewerEl);
@@ -77,13 +84,24 @@ export class ViewerSession {
     h.viewerEl.addEventListener("pointerup", onPointerUp);
     this.scope.addDispose(() => h.viewerEl.removeEventListener("pointerup", onPointerUp));
 
+    // Subscribe to store changes: re-reconcile affected pages (spec §6.2).
+    const unsub = this.store.onChange((path, ids) => {
+      if (path !== this.pdfPath) return;
+      const pages = new Set<number>();
+      for (const id of ids) {
+        const a = this.store.byId(path, id);
+        if (a) pages.add(a.anchor.pageNumber);
+      }
+      pages.forEach((p) => this.reconcilePage(p));
+    });
+    this.scope.addDispose(unsub);
+
     this.state = "attached";
-    // scan existing pages
     const pages = h.viewerEl.querySelectorAll<HTMLElement>(".page[data-page-number]");
     pages.forEach((p) => this.reconcilePage(parseInt(p.dataset.pageNumber ?? "", 10)));
   }
 
-  // M-1: draw one ephemeral annotation if a selection exists for this page.
+  // M0: render annotations from the store for this page.
   reconcilePage(pageNumber: number): void {
     if (!this.handles || this.state !== "attached") return;
     const pageEl = findPageEl(this.handles, pageNumber);
@@ -91,28 +109,22 @@ export class ViewerSession {
     const scale = readCurrentScale(this.handles);
     clearMarks(pageEl);
 
-    const snap = this.sel.current();
-    if (!snap || snap.pageNumber !== pageNumber) return;
-
-    const pageRect = pageEl.getBoundingClientRect();
-    const rects: AnchorRect[] = snap.clientRects.map((c) => ({
-      x: (c.left - pageRect.left) / scale,
-      y: (c.top - pageRect.top) / scale,
-      width: c.width / scale,
-      height: c.height / scale,
-    }));
-    const color = "#fff15c";
-    drawEphemeralMark(pageEl, rects, color, "highlight", scale);
-
-    const side: "left" | "right" = rects[0].x + rects[0].width / 2 < (pageRect.width / scale) / 2 ? "left" : "right";
-    drawEphemeralCard(this.handles.viewerContainerEl, pageEl, { side, text: snap.selectedText.slice(0, 60), color, anchorY: rects[0].y });
-    drawEphemeralConnector(this.handles.viewerContainerEl, { x1: rects[0].x, y1: rects[0].y, x2: rects[0].x + 50, y2: rects[0].y, color });
+    const anns = this.store.byPage(this.pdfPath, pageNumber);
+    for (const ann of anns) {
+      const rects = ann.anchor.geometry.rects;
+      drawEphemeralMark(pageEl, rects, ann.colorValueSnapshot, ann.markStyle, scale);
+      const first = rects[0];
+      const side: "left" | "right" = unionCenter(rects).x < ann.anchor.geometry.pageWidth / 2 ? "left" : "right";
+      const text = ann.comment ?? ann.anchor.quote.exact.slice(0, 60);
+      drawEphemeralCard(this.handles.viewerContainerEl, pageEl, { side, text, color: ann.colorValueSnapshot, anchorY: first.y });
+      drawEphemeralConnector(this.handles.viewerContainerEl, { x1: first.x, y1: first.y, x2: first.x + 50, y2: first.y, color: ann.colorValueSnapshot });
+    }
   }
 
   dispose(): void {
     if (this.state === "disposed") return;
     this.state = "disposing";
-    this.generation++; // invalidate pending async callbacks (spec §7.4)
+    this.generation++;
     if (this.probeTimer) clearTimeout(this.probeTimer);
     if (this.handles) {
       this.handles.viewerContainerEl.querySelector(".rm-card-rail-left")?.remove();

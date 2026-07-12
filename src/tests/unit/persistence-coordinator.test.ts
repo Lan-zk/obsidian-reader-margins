@@ -1,12 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { PersistenceCoordinator } from "src/store/persistence-coordinator";
-import { makeDefaultData } from "src/store/plugin-data-schema";
+import { makeDefaultData, type PluginDataV1 } from "src/store/plugin-data-schema";
 
 describe("PersistenceCoordinator", () => {
   it("serializes: only one save in flight; latest snapshot wins", async () => {
-    const saved: number[] = [];
     let resolveSave: () => void = () => {};
-    const save = vi.fn(() => new Promise<void>((res) => { resolveSave = res; }));
+    const save = vi.fn((_data: PluginDataV1) => new Promise<void>((res) => { resolveSave = res; }));
     const coord = new PersistenceCoordinator(save);
 
     coord.enqueue({ ...makeDefaultData(), stateRevision: 1 }, 1);
@@ -33,7 +32,7 @@ describe("PersistenceCoordinator", () => {
   });
   it("flushBestEffort awaits an in-flight save", async () => {
     let resolveSave: () => void = () => {};
-    const save = vi.fn(() => new Promise<void>((res) => { resolveSave = res; }));
+    const save = vi.fn((_data: PluginDataV1) => new Promise<void>((res) => { resolveSave = res; }));
     const coord = new PersistenceCoordinator(save);
     coord.enqueue({ ...makeDefaultData(), stateRevision: 1 }, 1);
     const flushP = coord.flushBestEffort();
