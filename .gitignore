@@ -1,0 +1,13 @@
+# Design docs and plans are private working materials
+docs/
+
+# SDD workspace (task briefs, implementer reports, review packages, ledger)
+.superpowers/
+
+# Build artifacts
+node_modules/
+main.js
+*.js.map
+
+# OS
+.DS_Store
