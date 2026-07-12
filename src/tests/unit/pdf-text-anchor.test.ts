@@ -52,13 +52,13 @@ describe("normalizeQuote", () => {
 
 describe("computeSortKey", () => {
   it("zero-pads page then y then x", () => {
-    const k = computeSortKey(12, { x: 30, y: 200 });
+    const k = computeSortKey(12, { x: 30, y: 200, width: 10, height: 10 });
     expect(k).toBe("00012-000200-000030");
   });
   it("sorts lexicographically as reading order", () => {
-    const a = computeSortKey(1, { x: 0, y: 100 });
-    const b = computeSortKey(1, { x: 0, y: 200 });
-    const c = computeSortKey(2, { x: 0, y: 50 });
+    const a = computeSortKey(1, { x: 0, y: 100, width: 10, height: 10 });
+    const b = computeSortKey(1, { x: 0, y: 200, width: 10, height: 10 });
+    const c = computeSortKey(2, { x: 0, y: 50, width: 10, height: 10 });
     expect([c, b, a].sort()).toEqual([a, b, c]);
   });
 });
