@@ -1,0 +1,9 @@
+{
+  "id": "reader-margins",
+  "name": "Reader Margins",
+  "version": "0.1.0",
+  "minAppVersion": "1.12.0",
+  "description": "Page-margin annotations over Obsidian's built-in PDF reader.",
+  "author": "Reader Margins",
+  "isDesktopOnly": true
+}

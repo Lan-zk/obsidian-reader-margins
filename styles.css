@@ -1,0 +1,3 @@
+/* Reader Margins styles. All classes prefixed rm-. */
+.rm-mark-layer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.rm-mark { position: absolute; pointer-events: none; }
