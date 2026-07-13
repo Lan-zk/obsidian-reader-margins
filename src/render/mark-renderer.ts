@@ -17,8 +17,22 @@ export function drawEphemeralMark(
   }
   // NOTE: do NOT clear here - clearMarks() at render start handles it, so multiple
   // annotations on the same page accumulate their marks instead of overwriting.
+  //
+  // Wrap one annotation's rects in a group element. The group carries the
+  // opacity/blend; children are opaque. Overlapping rects within the same
+  // selection then paint opaquely over each other (no alpha compositing between
+  // siblings), and the group's opacity is applied exactly once - so the overlap
+  // between adjacent line rects is not double-tinted. (Per-rect opacity would
+  // alpha-composite the overlap into a darker band.)
+  const doc = pageEl.ownerDocument;
+  const group = doc.createElement("div");
+  group.className = "rm-mark-group";
+  if (style === "highlight") {
+    group.style.opacity = "0.35";
+    group.style.mixBlendMode = "multiply";
+  }
   for (const r of rects) {
-    const el = pageEl.ownerDocument.createElement("div");
+    const el = doc.createElement("div");
     el.className = "rm-mark";
     el.style.left = `${r.x * scale}px`;
     el.style.width = `${r.width * scale}px`;
@@ -26,15 +40,14 @@ export function drawEphemeralMark(
       el.style.top = `${r.y * scale}px`;
       el.style.height = `${r.height * scale}px`;
       el.style.background = color;
-      el.style.opacity = "0.35";
-      el.style.mixBlendMode = "multiply";
     } else {
       el.style.top = `${(r.y + r.height - 2) * scale}px`;
-      el.style.height = "2px";
+      el.style.height = `${2 * scale}px`;
       el.style.background = color;
     }
-    layer.appendChild(el);
+    group.appendChild(el);
   }
+  layer.appendChild(group);
 }
 
 export function clearMarks(pageEl: HTMLElement): void {

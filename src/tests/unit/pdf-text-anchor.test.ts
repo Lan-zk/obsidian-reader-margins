@@ -40,22 +40,17 @@ describe("cleanGeometry", () => {
     );
     expect(out).toHaveLength(1);
   });
-  it("trims vertical overlap between different-line rects", () => {
+  it("preserves overlapping different-line rects (render handles stacking)", () => {
+    // cleanGeometry must NOT trim y-overlap - that would drop coverage where the
+    // two rects have different x ranges. Overlap stacking is solved at render
+    // time by grouping one annotation's rects under a single opacity.
     const out = cleanGeometry(
       [{ x: 0, y: 100, width: 100, height: 22 }, { x: 0, y: 120, width: 100, height: 22 }],
       600, 800
     );
     expect(out).toHaveLength(2);
-    // first rect's bottom must not extend past the second rect's top
-    expect(out[0].y + out[0].height).toBeLessThanOrEqual(out[1].y);
-  });
-  it("does not trim when rects do not overlap in y", () => {
-    const out = cleanGeometry(
-      [{ x: 0, y: 20, width: 30, height: 12 }, { x: 0, y: 50, width: 30, height: 12 }],
-      600, 800
-    );
-    expect(out[0].height).toBe(12);
-    expect(out[1].height).toBe(12);
+    expect(out[0].height).toBe(22);
+    expect(out[1].height).toBe(22);
   });
 });
 

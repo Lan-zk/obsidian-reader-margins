@@ -27,6 +27,21 @@ describe("ephemeral render (M-1 tracer)", () => {
     expect(parseFloat(mark.style.height)).toBe(2);
     expect(parseFloat(mark.style.top)).toBe(30 + 14 - 2);
   });
+  it("groups one annotation's rects under a single opacity so overlaps don't stack", () => {
+    const { pages } = buildHostFixture({});
+    const pageEl = pages[0].el;
+    drawEphemeralMark(pageEl, [
+      { x: 0, y: 100, width: 100, height: 22 },
+      { x: 0, y: 120, width: 100, height: 22 },
+    ], "#fff15c", "highlight", 1);
+    const group = pageEl.querySelector(".rm-mark-group") as HTMLElement;
+    expect(group).toBeTruthy();
+    expect(group.style.opacity).toBe("0.35");
+    const marks = group.querySelectorAll(".rm-mark");
+    expect(marks).toHaveLength(2);
+    // opacity lives on the group, not on each mark (so siblings don't alpha-composite)
+    expect((marks[0] as HTMLElement).style.opacity).toBe("");
+  });
   it("clearMarks removes the mark layer", () => {
     const { pages } = buildHostFixture({});
     drawEphemeralMark(pages[0].el, [{ x: 1, y: 1, width: 2, height: 2 }], "#fff15c", "highlight", 1);
