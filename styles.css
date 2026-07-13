@@ -40,50 +40,49 @@
 .rm-card-rail-left { left: 0; }
 .rm-card-rail-right { right: 0; }
 
-/* --- Cards: flat, 1px border, 8px radius, tonal (Atomic Minimalism) ------- */
+/* --- Cards: white paper, colored 1px border, 8px radius (Atomic Minimalism) -- */
 .rm-card {
   position: relative;
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
   padding: 8px;
   margin-bottom: 8px;
-  background: var(--rm-surface-1);
-  border: 1px solid var(--rm-outline-variant);
+  background: #ffffff;
+  border: 1px solid var(--rm-outline-variant); /* overridden inline per-card = annotation color */
   border-radius: 8px;
   max-height: 240px;
   overflow-y: auto;
-  color: var(--rm-on-surface);
+  color: #1c1b1b;
   font-family: "Hanken Grotesk", var(--font-text), var(--default-font), sans-serif;
 }
-.rm-card-strip { width: 3px; flex: 0 0 3px; border-radius: 2px; }
-.rm-card-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; cursor: text; }
-/* 高亮的原文: muted quote with a faint left rule */
+/* 高亮的原文: faint left rule, muted (only the quote has this line) */
 .rm-card-quote {
-  font-size: 12px; line-height: 16px; font-style: italic; color: var(--rm-on-surface-variant);
-  border-left: 2px solid var(--rm-outline-variant); padding-left: 6px;
-  word-break: break-word;
+  font-size: 12px; line-height: 16px; font-style: italic; color: #5c5c5c;
+  border-left: 2px solid rgba(0,0,0,0.12); padding-left: 6px;
+  word-break: break-word; cursor: text;
 }
-/* 用户批注的内容: body text */
+/* 用户批注的内容: body text (no left line) */
 .rm-card-comment {
-  font-size: 13px; line-height: 18px; color: var(--rm-on-surface);
-  word-break: break-word; white-space: pre-wrap;
+  font-size: 13px; line-height: 18px; color: #1c1b1b;
+  word-break: break-word; white-space: pre-wrap; cursor: text;
 }
-
-/* Card operation row (hover/focus-within) */
-.rm-card-ops { display: none; gap: 4px; margin-top: 4px; align-items: center; }
+/* Operation row: color swatches (left) + delete (right), space-between */
+.rm-card-ops { display: none; justify-content: space-between; align-items: center; }
 .rm-card:hover .rm-card-ops, .rm-card:focus-within .rm-card-ops { display: flex; }
-.rm-card-ops-edit { display: flex; }
-.rm-color-swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--rm-outline-variant); cursor: pointer; padding: 0; }
+.rm-card-ops-edit { display: flex; justify-content: flex-end; gap: 4px; }
+.rm-card-colors { display: inline-flex; gap: 4px; align-items: center; }
+.rm-color-swatch { width: 14px; height: 14px; border-radius: 9999px; border: 1px solid rgba(0,0,0,0.15); cursor: pointer; padding: 0; }
 .rm-color-swatch:hover { opacity: 0.85; }
 .rm-color-swatch-default { outline: 1px solid var(--rm-primary); outline-offset: 1px; }
 .rm-card-delete, .rm-card-save, .rm-card-cancel {
-  background: transparent; border: 1px solid var(--rm-outline-variant); border-radius: 4px;
-  cursor: pointer; padding: 0 6px; font-size: 11px; line-height: 16px; color: var(--rm-on-surface);
+  background: transparent; border: 1px solid rgba(0,0,0,0.15); border-radius: 4px;
+  cursor: pointer; padding: 0 6px; font-size: 11px; line-height: 16px; color: #1c1b1b;
 }
-.rm-card-delete:hover, .rm-card-save:hover, .rm-card-cancel:hover { background: var(--rm-surface-2); }
+.rm-card-delete:hover, .rm-card-save:hover, .rm-card-cancel:hover { background: rgba(0,0,0,0.05); }
 .rm-card-edit { width: 100%; min-height: 40px; font-size: 13px; line-height: 18px;
-  font-family: inherit; background: var(--rm-surface); color: var(--rm-on-surface);
-  border: 1px solid var(--rm-outline); border-radius: 4px; padding: 4px 6px; resize: vertical; }
+  font-family: inherit; background: #ffffff; color: #1c1b1b;
+  border: 1px solid rgba(0,0,0,0.2); border-radius: 4px; padding: 4px 6px; resize: vertical; }
 
 /* --- Connector: flat, muted 1px line (no depth) --------------------------- */
 .rm-connector-layer { position: absolute; inset: 0; pointer-events: none; z-index: 100; overflow: visible; }

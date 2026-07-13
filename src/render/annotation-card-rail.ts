@@ -60,12 +60,8 @@ export interface BuildCardInput {
   draftValue?: string;
 }
 
-// Card layout (docs/design.md + user spec):
-//   ┌────────────────────────┐
-//   │▌ "quoted original text"  │  ← 原文 (muted, italic)
-//   │▌ user comment            │  ← 批注 (normal)
-//   │▌ ● ● ● ●  🗑              │  ← color swatches + delete (hover)
-//   └────────────────────────┘
+// Card layout (docs/design.md + user spec): white paper, colored 1px border,
+// quote with faint left line, comment, circular color swatches (left) + delete (right).
 // All text via textContent; never innerHTML (spec §14.1).
 export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCallbacks): HTMLElement {
   const doc = parent.ownerDocument;
@@ -77,21 +73,13 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
   card.dataset.annotationId = input.id;
   card.style.position = "absolute";
   card.style.top = `${input.anchorY}px`;
+  card.style.borderColor = input.color; // 边框 = 标注色
 
-  // 划线: 3px color strip on the card's page-facing edge.
-  const strip = doc.createElement("div");
-  strip.className = "rm-card-strip";
-  strip.style.background = input.color;
-  card.appendChild(strip);
-
-  const content = doc.createElement("div");
-  content.className = "rm-card-content";
-
-  // 高亮的原文: always shown, muted quote style.
+  // 高亮的原文: always shown, faint left line, muted.
   const quoteEl = doc.createElement("div");
   quoteEl.className = "rm-card-quote";
   quoteEl.textContent = input.quote;
-  content.appendChild(quoteEl);
+  card.appendChild(quoteEl);
 
   if (input.editing) {
     // 用户批注内容: textarea (edit mode).
@@ -99,9 +87,9 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     ta.className = "rm-card-edit";
     ta.value = input.draftValue ?? input.comment ?? "";
     ta.placeholder = "写批注…";
-    content.appendChild(ta);
-    const ops = doc.createElement("div");
-    ops.className = "rm-card-ops rm-card-ops-edit";
+    card.appendChild(ta);
+    const actions = doc.createElement("div");
+    actions.className = "rm-card-ops rm-card-ops-edit";
     // done flag + mousedown(preventDefault) so save/cancel don't also trigger blur->commit.
     let done = false;
     const commitOnce = () => { if (done) return; done = true; cb.onCommitComment(input.id, ta.value); };
@@ -112,9 +100,8 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     const cancel = doc.createElement("button");
     cancel.className = "rm-card-cancel"; cancel.textContent = "✕"; cancel.title = "取消 (Esc)";
     cancel.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); cancelOnce(); });
-    ops.append(save, cancel);
-    content.appendChild(ops);
-    card.appendChild(content);
+    actions.append(save, cancel);
+    card.appendChild(actions);
     queueMicrotask(() => ta.focus());
     ta.addEventListener("keydown", (ev) => {
       if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") { ev.preventDefault(); commitOnce(); }
@@ -122,16 +109,18 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     });
     ta.addEventListener("blur", () => commitOnce());
   } else {
-    // 用户批注内容: shown when present.
+    // 用户批注内容: shown when present (no left line).
     if (input.comment) {
       const commentEl = doc.createElement("div");
       commentEl.className = "rm-card-comment";
       commentEl.textContent = input.comment;
-      content.appendChild(commentEl);
+      card.appendChild(commentEl);
     }
-    // Operation row (hover/focus-within): color swatches + delete.
+    // Operation row: circular color swatches (left) + delete (right), space-between.
     const ops = doc.createElement("div");
     ops.className = "rm-card-ops";
+    const colorsGroup = doc.createElement("div");
+    colorsGroup.className = "rm-card-colors";
     for (const c of input.colors) {
       const sw = doc.createElement("button");
       sw.className = "rm-color-swatch";
@@ -139,16 +128,18 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
       sw.title = c.label;
       sw.setAttribute("aria-label", `颜色 ${c.label}`);
       sw.addEventListener("click", (e) => { e.stopPropagation(); cb.onChangeColor(input.id, c.id); });
-      ops.appendChild(sw);
+      colorsGroup.appendChild(sw);
     }
     const del = doc.createElement("button");
     del.className = "rm-card-delete"; del.textContent = "🗑"; del.title = "删除";
     del.addEventListener("click", (e) => { e.stopPropagation(); cb.onDelete(input.id); });
-    ops.appendChild(del);
-    content.appendChild(ops);
-    card.appendChild(content);
-    // Click quote/comment to enter edit mode.
-    content.addEventListener("click", () => cb.onEdit(input.id));
+    ops.append(colorsGroup, del);
+    card.appendChild(ops);
+    // Click quote or comment to enter edit mode.
+    const editHandler = () => cb.onEdit(input.id);
+    quoteEl.addEventListener("click", editHandler);
+    const commentEl = card.querySelector(".rm-card-comment");
+    if (commentEl) commentEl.addEventListener("click", editHandler);
   }
   parent.appendChild(card);
   return card;
