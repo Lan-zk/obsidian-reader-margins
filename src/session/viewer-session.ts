@@ -6,7 +6,7 @@ import { DisposableScope } from "src/session/disposable-scope";
 import { SelectionSnapshotController } from "src/session/selection-snapshot-controller";
 import { drawEphemeralMark, clearMarks } from "src/render/mark-renderer";
 import { drawEphemeralCard } from "src/render/annotation-card-rail";
-import { drawEphemeralConnector, clearConnectors } from "src/render/connector-renderer";
+import { drawEphemeralConnector } from "src/render/connector-renderer";
 import { unionCenter } from "src/domain/pdf-text-anchor";
 import type { DurableAnnotationStore } from "src/store/durable-annotation-store";
 import type { DocumentSignature } from "src/domain/annotation";
@@ -108,11 +108,9 @@ export class ViewerSession {
     if (!pageEl) return;
     const scale = readCurrentScale(this.handles);
     const container = this.handles.viewerContainerEl;
-    // Clear previous render for this page (marks on page; cards/connectors on container).
+    // Clear only this page's marks (per-page, safe). Cards/connectors are deduped
+    // per-annotation-id in their draw functions (shared rail/SVG across pages).
     clearMarks(pageEl);
-    container.querySelector(".rm-card-rail-left")?.remove();
-    container.querySelector(".rm-card-rail-right")?.remove();
-    clearConnectors(container);
 
     const anns = this.store.byPage(this.pdfPath, pageNumber);
     if (anns.length === 0) return;
@@ -133,14 +131,11 @@ export class ViewerSession {
       const first = rects[0];
       const side: "left" | "right" = unionCenter(rects).x < ann.anchor.geometry.pageWidth / 2 ? "left" : "right";
       const text = ann.comment ?? ann.anchor.quote.exact.slice(0, 60);
-      const markCx = offsetX + (first.x + first.width / 2) * scale;
       const markCy = offsetY + first.y * scale;
-      // Card vertical position aligns with the mark's container-relative Y.
-      drawEphemeralCard(container, pageEl, { side, text, color: ann.colorValueSnapshot, anchorY: markCy });
-      // Connector from the mark's near edge toward the card rail.
+      drawEphemeralCard(container, pageEl, { side, text, color: ann.colorValueSnapshot, anchorY: markCy, id: ann.id });
       const markEdgeX = side === "left" ? offsetX + first.x * scale : offsetX + (first.x + first.width) * scale;
       const cardX = side === "left" ? Math.max(0, offsetX - 30) : offsetX + pageEl.offsetWidth + 30;
-      drawEphemeralConnector(container, { x1: markEdgeX, y1: markCy, x2: cardX, y2: markCy, color: ann.colorValueSnapshot });
+      drawEphemeralConnector(container, { x1: markEdgeX, y1: markCy, x2: cardX, y2: markCy, color: ann.colorValueSnapshot, id: ann.id });
     }
   }
 

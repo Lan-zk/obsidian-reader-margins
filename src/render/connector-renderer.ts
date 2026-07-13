@@ -1,5 +1,5 @@
 // src/render/connector-renderer.ts
-export interface ConnectorPoints { x1: number; y1: number; x2: number; y2: number; color: string; }
+export interface ConnectorPoints { x1: number; y1: number; x2: number; y2: number; color: string; id?: string; }
 
 export function drawEphemeralConnector(containerEl: HTMLElement, p: ConnectorPoints): void {
   let svg = containerEl.querySelector<SVGSVGElement>(".rm-connector-layer");
@@ -10,7 +10,10 @@ export function drawEphemeralConnector(containerEl: HTMLElement, p: ConnectorPoi
     svg.style.height = "100%";
     containerEl.appendChild(svg);
   }
+  // Remove any existing path for this annotation (prevents duplicates on re-render).
+  if (p.id) svg.querySelector(`path[data-annotation-id="${p.id}"]`)?.remove();
   const path = containerEl.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "path");
+  if (p.id) path.dataset.annotationId = p.id;
   const dx = (p.x2 - p.x1) / 2;
   path.setAttribute("d", `M ${p.x1} ${p.y1} C ${p.x1 + dx} ${p.y1}, ${p.x2 - dx} ${p.y2}, ${p.x2} ${p.y2}`);
   path.setAttribute("stroke", p.color);

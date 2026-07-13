@@ -4,6 +4,7 @@ export interface EphemeralCardInput {
   text: string;
   color: string;
   anchorY: number;
+  id?: string;
 }
 
 export function drawEphemeralCard(
@@ -18,8 +19,11 @@ export function drawEphemeralCard(
     rail.className = `rm-card-rail ${railClass}`;
     containerEl.appendChild(rail);
   }
+  // Remove any existing card for this annotation (prevents duplicates on re-render).
+  if (input.id) rail.querySelector(`.rm-card[data-annotation-id="${input.id}"]`)?.remove();
   const card = containerEl.ownerDocument.createElement("div");
   card.className = "rm-card";
+  if (input.id) card.dataset.annotationId = input.id;
   card.style.position = "absolute";
   card.style.top = `${input.anchorY}px`;
 
