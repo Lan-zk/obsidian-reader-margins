@@ -7,7 +7,12 @@ export default class ReaderMarginsPlugin extends Plugin {
   private sessions = new Map<WorkspaceLeaf, ViewerSession>();
 
   async onload() {
-    await loadPdfJs();
+    // loadPdfJs is an Obsidian global; guard in case it's unavailable in this build.
+    if (typeof loadPdfJs === "function") {
+      try { await loadPdfJs(); } catch (e) { console.error("reader-margins: loadPdfJs failed", e); }
+    } else {
+      console.warn("reader-margins: loadPdfJs global not found");
+    }
     this.store = new DurableAnnotationStore(async (data) => { await this.saveData(data); });
     const state = this.store.loadAndValidate(await this.loadData());
     if (state === "future" || state === "invalid") {
