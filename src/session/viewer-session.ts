@@ -146,7 +146,9 @@ export class ViewerSession {
     if (!this.handles || this.state !== "attached") return { ok: false, reason: "session not attached" };
     const snap = this.sel.current();
     if (!snap) return { ok: false, reason: "no valid selection" };
-    if (!this.signature) return { ok: false, reason: "source signature unavailable" };
+    // Resolve signature at create time - the PDF may not be loaded at attach time.
+    const sig = this.resolveSignature();
+    if (!sig) return { ok: false, reason: "source signature unavailable" };
     const pageEl = findPageEl(this.handles, snap.pageNumber);
     if (!pageEl) return { ok: false, reason: "page not found" };
     const scale = readCurrentScale(this.handles);
@@ -158,9 +160,16 @@ export class ViewerSession {
     const color = colors.find((c) => c.id === id) ?? colors[0];
     const result = this.store.create(this.pdfPath, {
       markStyle, colorId: color.id, colorLabel: color.name, colorValue: color.value, anchor,
-    }, this.signature);
+    }, sig);
     if (result.ok) snap.win.getSelection()?.removeAllRanges();
     return result;
+  }
+
+  private resolveSignature(): DocumentSignature | null {
+    if (!this.handles) return null;
+    const fp = readPdfFingerprint(this.handles);
+    const pc = readPageCount(this.handles);
+    return fp && pc ? { pdfFingerprint: fp, numPages: pc } : null;
   }
 
   dispose(): void {
