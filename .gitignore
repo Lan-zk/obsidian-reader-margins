@@ -11,3 +11,6 @@ main.js
 
 # OS
 .DS_Store
+
+# Test Obsidian vault
+test-obsidian/
