@@ -169,7 +169,10 @@ export class ViewerSession {
     if (!this.handles) return null;
     const fp = readPdfFingerprint(this.handles);
     const pc = readPageCount(this.handles);
-    return fp && pc ? { pdfFingerprint: fp, numPages: pc } : null;
+    if (!pc) return null; // numPages is required for the guard
+    // If the fingerprint is inaccessible, fall back to "unknown" - numPages still
+    // guards against same-path replacement with a different-length PDF (spec §10.2).
+    return { pdfFingerprint: fp ?? "unknown", numPages: pc };
   }
 
   dispose(): void {
