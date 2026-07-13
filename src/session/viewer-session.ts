@@ -99,6 +99,7 @@ export class ViewerSession {
       for (const id of ids) {
         const a = this.store.byId(path, id);
         if (a) pages.add(a.anchor.pageNumber);
+        else this.removeAnnotationDom(id); // deleted: remove card + connector
       }
       pages.forEach((p) => this.reconcilePage(p));
     });
@@ -187,6 +188,14 @@ export class ViewerSession {
     }
   }
 
+  // Remove a deleted annotation's card + connector from the DOM (marks are cleared by renderPage).
+  private removeAnnotationDom(id: string): void {
+    if (!this.handles) return;
+    const container = this.handles.viewerContainerEl;
+    container.querySelectorAll(`.rm-card[data-annotation-id="${id}"]`).forEach((n) => n.remove());
+    container.querySelectorAll(`.rm-connector-layer path[data-annotation-id="${id}"]`).forEach((n) => n.remove());
+  }
+
   hasSelection(): boolean { return this.sel.current() !== null; }
 
   createAnnotation(markStyle: "highlight" | "underline", colorId?: string): MutationResult {
@@ -268,9 +277,12 @@ export class ViewerSession {
       onDelete: (id) => {
         const ann = this.store.byId(this.pdfPath, id);
         if (!ann) return;
+        const page = ann.anchor.pageNumber;
         const tombstone = structuredClone(ann);
         const result = this.store.delete(this.pdfPath, id);
         if (result.ok) {
+          this.removeAnnotationDom(id);
+          this.reconcilePage(page); // clear mark + redraw remaining
           showUndoNotice("已删除批注", () => {
             const sig = this.resolveSignature();
             if (!sig) { new Notice("无法恢复：签名不可用"); return; }
