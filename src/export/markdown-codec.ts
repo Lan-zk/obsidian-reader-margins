@@ -1,7 +1,8 @@
 // src/export/markdown-codec.ts
 // Pure snapshot renderer (spec §15.4). No DOM, no obsidian - unit-testable.
-import type { AnnotationRecordV1 } from "src/domain/annotation";
+import type { AnnotationRecordV1, MarkStyle } from "src/domain/annotation";
 import { computeSortKey } from "src/domain/pdf-text-anchor";
+import { validateHexColor } from "src/domain/colors";
 
 export interface SnapshotInput {
   pdfBaseName: string;
@@ -17,13 +18,30 @@ export function escapeCalloutLine(text: string): string {
   return text.replace(/^>/gm, "\\>");
 }
 
+// Escape HTML-special characters so untrusted quote text is safe inside <mark>/<u>.
+export function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 // Escape ] and # inside a wikilink target so the link stays valid (spec §15.5).
 function escapeWikilinkPath(path: string): string {
   return path.replace(/([\]#])/g, "\\$1");
 }
 
-function styleLabel(s: "highlight" | "underline"): string {
+function styleLabel(s: MarkStyle): string {
   return s === "highlight" ? "高亮" : "下划线";
+}
+
+// Wrap quote text in a colored <mark> (highlight) or <u> (underline) so the
+// annotation color renders in Obsidian's reading view (cf. PDF++ export).
+// Color is re-validated; an invalid value falls back to a neutral swatch.
+function styledQuote(exact: string, markStyle: MarkStyle, colorRaw: string): string {
+  const safe = escapeHtml(exact.replace(/\n/g, " "));
+  const color = validateHexColor(colorRaw) ?? "#cccccc";
+  if (markStyle === "underline") {
+    return `<u style="text-decoration-color: ${color}; text-decoration-thickness: 2px;">${safe}</u>`;
+  }
+  return `<mark style="background-color: ${color};">${safe}</mark>`;
 }
 
 export function renderSnapshot(input: SnapshotInput): string {
@@ -54,12 +72,14 @@ export function renderSnapshot(input: SnapshotInput): string {
   for (const ann of sorted) {
     const page = ann.anchor.pageNumber;
     const link = `[[${escapeWikilinkPath(input.pdfPath)}#page=${page}|第 ${page} 页]]`;
+    // HTML comment carries id+revision for future reconciliation (spec §15.4).
+    // It is invisible in reading view.
     lines.push(`<!-- reader-margins:annotation id="${ann.id}" revision="${ann.revision}" -->`);
-    lines.push(`> [!quote] ${link} · ${ann.colorLabelSnapshot} · ${styleLabel(ann.markStyle)}`);
-    const text = escapeCalloutLine(ann.anchor.quote.exact.replace(/\n/g, " "));
-    lines.push(`> ${text}`);
+    lines.push(`> [!quote] ${link} · ${styleLabel(ann.markStyle)}`);
+    lines.push(`> ${styledQuote(ann.anchor.quote.exact, ann.markStyle, ann.colorValueSnapshot)}`);
     if (ann.comment && ann.comment.trim()) {
       lines.push(">");
+      lines.push("> **批注**");
       for (const line of ann.comment.split("\n")) {
         lines.push(`> ${escapeCalloutLine(line)}`);
       }
