@@ -34,6 +34,8 @@ export class ViewerSession {
   private probeTimer: ReturnType<typeof setTimeout> | null = null;
   private opts: Required<ViewerSessionOptions>;
   private signature: DocumentSignature | null = null;
+  private pendingReconcile = new Set<number>();
+  private rafId: number | null = null;
 
   constructor(private view: any, pdfPath: string, private store: DurableAnnotationStore, opts: ViewerSessionOptions = {}) {
     this.pdfPath = pdfPath;
@@ -103,7 +105,28 @@ export class ViewerSession {
   }
 
   // M0: render annotations from the store for this page.
+  // Coalesced via rAF so rapid events (zoom -> multiple textlayerrendered) batch into one frame (spec §12.6).
   reconcilePage(pageNumber: number): void {
+    if (!this.handles || this.state !== "attached") return;
+    this.pendingReconcile.add(pageNumber);
+    if (this.rafId !== null) return;
+    const gen = this.generation;
+    const win = this.handles.viewerEl.ownerDocument.defaultView;
+    if (!win) { this.flushReconcile(); return; }
+    this.rafId = win.requestAnimationFrame(() => {
+      if (this.generation !== gen) { this.rafId = null; return; }
+      this.rafId = null;
+      this.flushReconcile();
+    });
+  }
+
+  private flushReconcile(): void {
+    const pages = this.pendingReconcile;
+    this.pendingReconcile = new Set();
+    for (const p of pages) this.renderPage(p);
+  }
+
+  private renderPage(pageNumber: number): void {
     if (!this.handles || this.state !== "attached") return;
     const pageEl = findPageEl(this.handles, pageNumber);
     if (!pageEl) return;
@@ -180,6 +203,10 @@ export class ViewerSession {
     this.state = "disposing";
     this.generation++;
     if (this.probeTimer) clearTimeout(this.probeTimer);
+    if (this.rafId !== null && this.handles) {
+      this.handles.viewerEl.ownerDocument.defaultView?.cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
     if (this.handles) {
       this.handles.viewerContainerEl.querySelector(".rm-card-rail-left")?.remove();
       this.handles.viewerContainerEl.querySelector(".rm-card-rail-right")?.remove();
