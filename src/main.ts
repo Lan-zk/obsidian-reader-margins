@@ -2,20 +2,28 @@ import { Plugin, WorkspaceLeaf, Notice } from "obsidian";
 import { DurableAnnotationStore } from "src/store/durable-annotation-store";
 import { ViewerSession } from "src/session/viewer-session";
 import { ReaderMarginsSettingsTab } from "src/settings/settings-tab";
+import { DiagnosticsReporter } from "src/diagnostics/diagnostics-reporter";
 
 export default class ReaderMarginsPlugin extends Plugin {
   store!: DurableAnnotationStore;
+  diagnostics = new DiagnosticsReporter();
   private sessions = new Map<WorkspaceLeaf, ViewerSession>();
 
   async onload() {
     // loadPdfJs is an Obsidian global; guard in case it's unavailable in this build.
     if (typeof loadPdfJs === "function") {
-      try { await loadPdfJs(); } catch (e) { console.error("reader-margins: loadPdfJs failed", e); }
+      try { await loadPdfJs(); this.diagnostics.set("pdfJsLoaded", true); } catch (e) { console.error("reader-margins: loadPdfJs failed", e); this.diagnostics.set("pdfJsLoaded", false); }
     } else {
       console.warn("reader-margins: loadPdfJs global not found");
+      this.diagnostics.set("pdfJsLoaded", false);
     }
     this.store = new DurableAnnotationStore(async (data) => { await this.saveData(data); });
     const state = this.store.loadAndValidate(await this.loadData());
+    this.diagnostics.set("obsidianVersion", (this.app as any).appVersion ?? "unknown");
+    this.diagnostics.set("manifestVersion", this.manifest.version);
+    this.diagnostics.set("schemaLoadState", state);
+    this.diagnostics.set("isReadonly", this.store.isReadonly);
+    this.store.onStatus((s) => this.diagnostics.set("persistenceStatus", s.state));
     if (state === "future" || state === "invalid") {
       new Notice(`Reader Margins: ${state} data.json; annotations disabled to prevent overwrite.`, 10000);
     }
@@ -60,6 +68,7 @@ export default class ReaderMarginsPlugin extends Plugin {
 
   private reconcileLeaves() {
     this.app.workspace.iterateAllLeaves((leaf) => this.attachLeaf(leaf));
+    this.diagnostics.set("sessionCount", this.sessions.size);
   }
 
   private attachLeaf(leaf: WorkspaceLeaf) {
