@@ -73,6 +73,8 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
   card.dataset.annotationId = input.id;
   card.style.position = "absolute";
   card.style.top = `${input.anchorY}px`;
+  card.style.left = "0";
+  card.style.right = "0"; // fill the rail width so all cards on a side are equally wide
   card.style.borderColor = input.color; // 边框 = 标注色
 
   // Scrollable text area (quote + comment/textarea); ops stay fixed at the bottom.

@@ -52,6 +52,7 @@
   border: 1px solid var(--rm-outline-variant); /* overridden inline per-card = annotation color */
   border-radius: 8px;            /* design.md: cards 8px radius */
   max-height: 240px;
+  box-sizing: border-box;        /* width:100% (left:0;right:0) includes border+padding */
   color: #1c1b1b;
   font-family: "Hanken Grotesk", var(--font-text), var(--default-font), sans-serif;
 }
