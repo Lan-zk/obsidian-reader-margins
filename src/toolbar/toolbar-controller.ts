@@ -3,6 +3,7 @@ import type { HostHandles } from "src/host/host-typings";
 import { DisposableScope } from "src/session/disposable-scope";
 import { PersistenceStatusView } from "src/toolbar/persistence-status";
 import type { PersistenceStatus } from "src/store/persistence-coordinator";
+import { createIcon, type IconName } from "src/render/icons";
 
 export interface ToolbarColors { id: string; value: string; label: string; }
 export interface ToolbarCallbacks {
@@ -22,6 +23,7 @@ export class ToolbarController {
   private callbacks: ToolbarCallbacks | null = null;
   private underlineBtn: HTMLElement | null = null;
   private exportBtn: HTMLElement | null = null;
+  private separator: HTMLElement | null = null;
 
   constructor(private h: HostHandles, colors: ToolbarColors[], defaultColorId: string) {
     this.colors = colors;
@@ -40,14 +42,17 @@ export class ToolbarController {
 
   render(cb: ToolbarCallbacks): void {
     this.callbacks = cb;
-    // Underline + export buttons are created once; their callbacks do not change
-    // when the color set changes, so they survive a swatch rebuild.
+    // Underline + export buttons (with a separator from the color swatches) are
+    // created once; their callbacks do not change when the color set changes, so
+    // they survive a swatch rebuild.
     if (!this.underlineBtn) {
-      this.underlineBtn = this.makeButton("rm-toolbar-underline", "U̲", "Underline and comment", () => this.callbacks?.onUnderline());
-      this.exportBtn = this.makeButton("rm-toolbar-export", "⤓", "Export Markdown", () => this.callbacks?.onExport());
-      this.root.appendChild(this.underlineBtn);
-      this.root.appendChild(this.exportBtn);
-      this.scope.addDispose(() => { this.underlineBtn?.remove(); this.exportBtn?.remove(); });
+      this.underlineBtn = this.makeIconButton("rm-toolbar-underline", "underline", "Underline and comment", () => this.callbacks?.onUnderline());
+      this.exportBtn = this.makeIconButton("rm-toolbar-export", "download", "Export Markdown", () => this.callbacks?.onExport());
+      const doc = this.root.ownerDocument;
+      this.separator = doc.createElement("span");
+      this.separator.className = "rm-toolbar-separator";
+      this.root.append(this.separator, this.underlineBtn, this.exportBtn);
+      this.scope.addDispose(() => { this.underlineBtn?.remove(); this.exportBtn?.remove(); this.separator?.remove(); });
     }
     this.rerenderSwatches();
   }
@@ -69,17 +74,20 @@ export class ToolbarController {
       sw.addEventListener("click", () => cb.onColor(c.id));
       group.appendChild(sw);
     }
-    if (this.underlineBtn) this.root.insertBefore(group, this.underlineBtn);
+    // Swatches sit before the separator that divides them from the action buttons.
+    const before = this.separator ?? this.underlineBtn;
+    if (before) this.root.insertBefore(group, before);
     else this.root.appendChild(group);
     this.group = group;
   }
 
-  private makeButton(cls: string, label: string, title: string, onClick: () => void): HTMLElement {
+  private makeIconButton(cls: string, iconName: IconName, title: string, onClick: () => void): HTMLElement {
     const doc = this.root.ownerDocument;
     const btn = doc.createElement("button");
     btn.className = cls;
-    btn.textContent = label;
     btn.title = title;
+    btn.setAttribute("aria-label", title);
+    btn.appendChild(createIcon(doc, iconName, 16));
     btn.addEventListener("click", onClick);
     return btn;
   }

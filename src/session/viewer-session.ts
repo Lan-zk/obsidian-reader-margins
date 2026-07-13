@@ -45,7 +45,7 @@ export class ViewerSession {
   private pendingReconcile = new Set<number>();
   private rafId: number | null = null;
   private editingId: string | null = null;
-  private selectedId: string | null = null;
+  private hoveredId: string | null = null;
   private draft = new DraftController();
   private toolbar: ToolbarController | null = null;
 
@@ -100,11 +100,7 @@ export class ViewerSession {
     this.scope.addDispose(() => h.viewerEl.removeEventListener("pointerup", onPointerUp));
 
     // Click hit-test: clicking a mark flashes its linked card (spec §12.2).
-    // A click outside any card also deselects (grip clicks stopPropagation).
-    const onClick = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement | null)?.closest?.(".rm-card")) this.selectCard(null);
-      this.onPageClick(e);
-    };
+    const onClick = (e: MouseEvent) => this.onPageClick(e);
     h.viewerEl.addEventListener("click", onClick);
     this.scope.addDispose(() => h.viewerEl.removeEventListener("click", onClick));
 
@@ -214,7 +210,6 @@ export class ViewerSession {
         colors: this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name })),
         side, anchorY: markCenterY, editing: isEditing,
         draftValue: isEditing ? this.draft.peek(ann.id)?.value : undefined,
-        selected: this.selectedId === ann.id,
       }, this.cardCallbacks());
       const markEdgeX = side === "left" ? offsetX + first.x * scale : offsetX + (first.x + first.width) * scale;
       bySide[side].push({ ann, card, anchorY: markCenterY, markCenterY, markEdgeX });
@@ -238,7 +233,7 @@ export class ViewerSession {
         if (pos) g.card.style.top = `${pos.top}px`;
         const cardHeight = g.card.offsetHeight || 40;
         const cardCenterY = (pos?.top ?? g.anchorY) + cardHeight / 2;
-        drawEphemeralConnector(container, { x1: g.markEdgeX, y1: g.markCenterY, x2: cardEdgeX, y2: cardCenterY, color: g.ann.colorValueSnapshot, id: g.ann.id, selected: this.selectedId === g.ann.id });
+        drawEphemeralConnector(container, { x1: g.markEdgeX, y1: g.markCenterY, x2: cardEdgeX, y2: cardCenterY, color: g.ann.colorValueSnapshot, id: g.ann.id, selected: this.hoveredId === g.ann.id });
       }
     }
   }
@@ -330,18 +325,16 @@ export class ViewerSession {
     }, 1500);
   }
 
-  // Toggle card selection: a primary outline on the card + a flowing-dash connector.
-  // Direct DOM toggle (no full re-render) for snappy feedback; re-render preserves it
-  // via the `selected` flag on buildCard / drawEphemeralConnector.
-  private selectCard(id: string | null): void {
+  // Hover = selected: highlight the hovered card's connector (the card itself is
+  // styled via CSS :hover). Connector-only DOM toggle; re-render preserves it via the
+  // `selected` flag on drawEphemeralConnector.
+  private hoverCard(id: string | null): void {
     if (!this.handles) return;
-    if (this.selectedId === id) return;
+    if (this.hoveredId === id) return;
     const container = this.handles.viewerContainerEl;
-    container.querySelectorAll(".rm-card-selected").forEach((n) => n.classList.remove("rm-card-selected"));
     container.querySelectorAll(".rm-connector-selected").forEach((n) => n.classList.remove("rm-connector-selected"));
-    this.selectedId = id;
+    this.hoveredId = id;
     if (id) {
-      container.querySelector(`.rm-card[data-annotation-id="${id}"]`)?.classList.add("rm-card-selected");
       container.querySelector(`g.rm-connector[data-annotation-id="${id}"]`)?.classList.add("rm-connector-selected");
     }
   }
@@ -362,7 +355,7 @@ export class ViewerSession {
       if (ann) this.reconcilePage(ann.anchor.pageNumber);
     };
     return {
-      onSelect: (id) => this.selectCard(this.selectedId === id ? null : id),
+      onHover: (id, on) => this.hoverCard(on ? id : null),
       onEdit: (id) => {
         const ann = this.store.byId(this.pdfPath, id);
         if (!ann) return;

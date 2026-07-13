@@ -40,60 +40,107 @@
 .rm-card-rail-left { left: 0; }
 .rm-card-rail-right { right: 0; }
 
-/* --- Cards: white paper, colored 1px border, 8px radius (Atomic Minimalism) -- */
+/* --- Cards: border-defined on the base surface, 1px colored border, 8px radius (Atomic Minimalism) -- */
 .rm-card {
   position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;                      /* 4px grid: 8px between text area and ops */
-  padding: 8px;                  /* design.md: cards 8px padding */
+  padding: 10px;                 /* design.md: cards 8px padding */
   margin-bottom: 8px;
-  background: #ffffff;
-  border: 1px solid var(--rm-outline-variant); /* overridden inline per-card = annotation color */
+  background-color: var(--rm-surface); /* base surface: the 1px colored border defines the card (no gray fill) */
+  border: 1px solid var(--rm-card-color, var(--rm-outline-variant)); /* annotation color, set inline via --rm-card-color */
   border-radius: 8px;            /* design.md: cards 8px radius */
   max-height: 240px;
   box-sizing: border-box;        /* width:100% (left:0;right:0) includes border+padding */
-  color: #1c1b1b;
+  color: var(--rm-on-surface);
   font-family: "Hanken Grotesk", var(--font-text), var(--default-font), sans-serif;
+  transition: background-color 120ms ease-out, border-color 120ms ease-out;
 }
-/* Click mark -> card flash (spec §12.2) */
-.rm-card-linked { animation: rm-flash 1.5s ease-out; }
-@keyframes rm-flash {
-  0%, 25% { box-shadow: 0 0 0 3px var(--interactive-accent, #5c8db8); }
-  100% { box-shadow: 0 0 0 0 transparent; }
+/* Hover = selected state: per-color tint + deepened annotation border (no generic gray/dark ring). */
+.rm-card:hover {
+  background-color: color-mix(in srgb, var(--rm-card-color) 14%, var(--rm-surface));
+  border-color: color-mix(in srgb, var(--rm-card-color) 70%, var(--rm-on-surface));
 }
 /* Scrollable text area; ops stay fixed at the bottom (not scrolling). */
-.rm-card-text { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
-/* 高亮的原文: faint left rule, muted (only the quote has this line) */
+.rm-card-text { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 16px; /* clear the top-right grip */ }
+.rm-card-text::-webkit-scrollbar { width: 6px; }
+.rm-card-text::-webkit-scrollbar-thumb { background: var(--rm-outline-variant); border-radius: 9999px; }
+/* 高亮的原文: 1px left rule (within the side-stripe ban), muted italic */
 .rm-card-quote {
-  font-size: 12px; line-height: 16px; font-style: italic; color: #5c5c5c;
-  border-left: 2px solid rgba(0,0,0,0.12); padding-left: 8px;
+  font-size: 12px; line-height: 16px; font-style: italic; color: var(--rm-on-surface-variant);
+  border-left: 1px solid var(--rm-outline-variant); padding-left: 8px;
   word-break: break-word; cursor: text;
 }
 /* 用户批注的内容: body text (no left line) */
 .rm-card-comment {
-  font-size: 13px; line-height: 18px; color: #1c1b1b;
+  font-size: 13px; line-height: 18px; color: var(--rm-on-surface);
   word-break: break-word; white-space: pre-wrap; cursor: text;
 }
 /* Operation row: fixed at card bottom; color swatches (left) + delete (right) */
 .rm-card-ops { display: none; justify-content: space-between; align-items: center; flex: 0 0 auto; }
 .rm-card:hover .rm-card-ops, .rm-card:focus-within .rm-card-ops { display: flex; }
 .rm-card-ops-edit { display: flex; justify-content: flex-end; gap: 4px; flex: 0 0 auto; }
-.rm-card-colors { display: inline-flex; gap: 4px; align-items: center; }
-.rm-color-swatch { width: 14px; height: 14px; border-radius: 9999px; border: 1px solid rgba(0,0,0,0.15); cursor: pointer; padding: 0; }
-.rm-color-swatch:hover { opacity: 0.85; }
-.rm-color-swatch-default { outline: 1px solid var(--rm-primary); outline-offset: 1px; }
-.rm-card-delete, .rm-card-save, .rm-card-cancel {
-  background: transparent; border: 1px solid rgba(0,0,0,0.15); border-radius: 4px;
-  cursor: pointer; padding: 0 6px; font-size: 11px; line-height: 16px; color: #1c1b1b;
+.rm-card-colors { display: inline-flex; gap: 6px; align-items: center; }
+/* Grip drag-handle (top-right); revealed on hover, future drag starts here. */
+.rm-card-grip {
+  position: absolute; top: 4px; right: 4px; z-index: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; background: transparent; border: none; border-radius: 4px;
+  cursor: grab; padding: 0; color: var(--rm-on-surface-variant); opacity: 0;
+  transition: opacity 120ms ease-out, color 120ms ease-out, background-color 120ms ease-out;
 }
-.rm-card-delete:hover, .rm-card-save:hover, .rm-card-cancel:hover { background: rgba(0,0,0,0.05); }
-.rm-card-edit { width: 100%; min-height: 40px; font-size: 13px; line-height: 18px;
-  font-family: inherit; background: #ffffff; color: #1c1b1b;
-  border: 1px solid rgba(0,0,0,0.2); border-radius: 4px; padding: 4px 6px; resize: vertical; }
+.rm-card:hover .rm-card-grip { opacity: 0.7; }
+.rm-card-grip:hover { opacity: 1; color: var(--rm-on-surface); background-color: var(--rm-surface-3); }
+.rm-color-swatch {
+  width: 16px; height: 16px; border-radius: 9999px; border: 1px solid var(--rm-outline-variant);
+  cursor: pointer; padding: 0; transition: transform 120ms ease-out;
+}
+.rm-color-swatch:hover { transform: scale(1.12); }
+/* Default-color ring: a gap-separated outline visible on any swatch color. */
+.rm-color-swatch-default { box-shadow: 0 0 0 1.5px var(--rm-surface-1), 0 0 0 2.5px var(--rm-outline); }
+/* Icon buttons: save / cancel / delete (consistent 2px-stroke SVG icons, scaled) */
+.rm-card-delete, .rm-card-save, .rm-card-cancel {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; background: transparent;
+  border: 1px solid var(--rm-outline-variant); border-radius: 4px;
+  cursor: pointer; padding: 0; color: var(--rm-on-surface);
+  transition: background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out;
+}
+.rm-card-delete:hover, .rm-card-save:hover, .rm-card-cancel:hover {
+  background-color: var(--rm-surface-2); border-color: var(--rm-outline);
+}
+.rm-card-delete:hover { color: var(--rm-error); border-color: var(--rm-error); }
+.rm-card-delete svg, .rm-card-save svg, .rm-card-cancel svg { display: block; }
+.rm-card-edit {
+  width: 100%; min-height: 44px; font-size: 13px; line-height: 18px;
+  font-family: inherit; background: var(--rm-surface); color: var(--rm-on-surface);
+  border: 1px solid var(--rm-outline-variant); border-radius: 4px; padding: 6px 8px; resize: vertical;
+}
+.rm-card-edit:focus { border-color: var(--rm-primary); outline: none; }
 
-/* --- Connector: flat, muted 1px line (no depth) --------------------------- */
+/* Card flash: clicking a mark pulses its linked card (spec §12.2). Flat tonal
+   pulse - no shadow (design.md bans depth-mimicking effects). */
+@keyframes rm-card-flash {
+  0% { background-color: var(--rm-surface); }
+  12% { background-color: color-mix(in srgb, var(--rm-card-color, var(--rm-secondary)) 22%, var(--rm-surface)); }
+  100% { background-color: var(--rm-surface); }
+}
+.rm-card-linked { animation: rm-card-flash 1.4s ease-out; }
+
+/* --- Connector: flat muted line + anchor dot ------------------------------ */
 .rm-connector-layer { position: absolute; inset: 0; pointer-events: none; z-index: 100; overflow: visible; }
+.rm-connector path { transition: opacity 200ms ease-out; stroke-dasharray: 4 3; }
+.rm-connector circle { transition: opacity 200ms ease-out; }
+/* Dashes flow toward the card when its link is active (mark click) or selected. */
+@keyframes rm-connector-flow {
+  to { stroke-dashoffset: -7; }
+}
+.rm-connector-active path, .rm-connector-selected path {
+  opacity: 0.95 !important;
+  animation: rm-connector-flow 0.7s linear infinite;
+}
+.rm-connector-active circle, .rm-connector-selected circle { opacity: 1; }
 
 /* --- Persistence status --------------------------------------------------- */
 .rm-persistence-status { display: inline-block; width: 8px; height: 8px; border-radius: 9999px;
@@ -103,10 +150,35 @@
 .rm-persistence-dirty { background: var(--rm-secondary); }
 
 /* --- Toolbar -------------------------------------------------------------- */
-.rm-toolbar-fallback { position: absolute; top: 4px; right: 8px; z-index: 200; display: flex; gap: 4px;
-  align-items: center; padding: 4px 8px; background: var(--rm-surface-1); border-radius: 8px;
-  border: 1px solid var(--rm-outline-variant); }
-.rm-toolbar-colors { display: inline-flex; gap: 4px; align-items: center; }
-.rm-toolbar-underline, .rm-toolbar-export { background: transparent; border: 1px solid var(--rm-outline-variant);
-  border-radius: 4px; cursor: pointer; padding: 2px 6px; font-size: 12px; color: var(--rm-on-surface); }
-.rm-toolbar-underline:hover, .rm-toolbar-export:hover { background: var(--rm-surface-2); }
+.rm-toolbar-fallback {
+  position: absolute; top: 4px; right: 8px; z-index: 200; display: flex; gap: 2px;
+  align-items: center; padding: 4px 6px; background: var(--rm-surface-1); border-radius: 8px;
+  border: 1px solid var(--rm-outline-variant);
+}
+.rm-toolbar-colors { display: inline-flex; gap: 6px; align-items: center; }
+.rm-toolbar-separator { width: 1px; height: 18px; background: var(--rm-outline-variant); margin: 0 4px; flex: 0 0 auto; }
+/* Icon buttons: transparent toolbar affordance, hover lifts one tonal step. */
+.rm-toolbar-underline, .rm-toolbar-export {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; background: transparent; border: 1px solid transparent;
+  border-radius: 6px; cursor: pointer; padding: 0; color: var(--rm-on-surface);
+  transition: background-color 120ms ease-out, border-color 120ms ease-out;
+}
+.rm-toolbar-underline:hover, .rm-toolbar-export:hover {
+  background-color: var(--rm-surface-2); border-color: var(--rm-outline-variant);
+}
+.rm-toolbar-underline:focus-visible, .rm-toolbar-export:focus-visible {
+  outline: 2px solid var(--rm-primary); outline-offset: 1px;
+}
+.rm-toolbar-underline svg, .rm-toolbar-export svg { display: block; }
+
+/* --- Reduced motion ------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .rm-card, .rm-color-swatch, .rm-connector path, .rm-connector circle,
+  .rm-card-delete, .rm-card-save, .rm-card-cancel, .rm-card-grip,
+  .rm-toolbar-underline, .rm-toolbar-export {
+    transition: none !important; animation: none !important;
+  }
+  /* Flash becomes a static tonal tint so the link is still indicated. */
+  .rm-card-linked { background-color: color-mix(in srgb, var(--rm-card-color, var(--rm-secondary)) 22%, var(--rm-surface)); }
+}

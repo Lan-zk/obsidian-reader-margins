@@ -14,3 +14,6 @@ main.js
 
 # Test Obsidian vault
 test-obsidian/
+
+# Tooling
+.codex/

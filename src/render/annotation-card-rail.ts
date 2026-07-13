@@ -1,4 +1,6 @@
 // src/render/annotation-card-rail.ts
+import { createIcon } from "src/render/icons";
+
 export interface EphemeralCardInput {
   side: "left" | "right";
   text: string;
@@ -42,6 +44,7 @@ export function drawEphemeralCard(
 }
 
 export interface CardCallbacks {
+  onHover: (id: string, on: boolean) => void;
   onEdit: (id: string) => void;
   onCommitComment: (id: string, value: string) => void;
   onCancelEdit: (id: string) => void;
@@ -60,8 +63,9 @@ export interface BuildCardInput {
   draftValue?: string;
 }
 
-// Card layout (docs/design.md + user spec): white paper, colored 1px border,
-// quote with faint left line, comment, circular color swatches (left) + delete (right).
+// Card layout (docs/design.md): border-defined card on the base surface (no gray
+// fill), quote with 1px left line, comment, color swatches (left) + delete (right),
+// grip drag-handle (top-right). Hover = selected state.
 // All text via textContent; never innerHTML (spec §14.1).
 export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCallbacks): HTMLElement {
   const doc = parent.ownerDocument;
@@ -75,7 +79,21 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
   card.style.top = `${input.anchorY}px`;
   card.style.left = "0";
   card.style.right = "0"; // fill the rail width so all cards on a side are equally wide
-  card.style.borderColor = input.color; // 边框 = 标注色
+  card.style.setProperty("--rm-card-color", input.color); // 标注色 as a token: hover tints bg + deepens border per color
+
+  // Grip drag-handle (top-right); future drag starts on pointerdown here.
+  const grip = doc.createElement("button");
+  grip.type = "button";
+  grip.className = "rm-card-grip";
+  grip.title = "拖动";
+  grip.setAttribute("aria-label", "拖动批注卡片");
+  grip.appendChild(createIcon(doc, "grip", 14));
+  card.appendChild(grip);
+
+  // Hover = selected state: highlight this card's connector (the card itself is
+  // styled via CSS :hover). Re-render preserves the connector via its `selected` flag.
+  card.addEventListener("mouseenter", () => cb.onHover(input.id, true));
+  card.addEventListener("mouseleave", () => cb.onHover(input.id, false));
 
   // Scrollable text area (quote + comment/textarea); ops stay fixed at the bottom.
   const textArea = doc.createElement("div");
@@ -102,10 +120,10 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     const commitOnce = () => { if (done) return; done = true; cb.onCommitComment(input.id, ta.value); };
     const cancelOnce = () => { if (done) return; done = true; cb.onCancelEdit(input.id); };
     const save = doc.createElement("button");
-    save.className = "rm-card-save"; save.textContent = "✓"; save.title = "保存 (Cmd+Enter)";
+    save.className = "rm-card-save"; save.title = "保存 (Cmd+Enter)"; save.appendChild(createIcon(doc, "check", 14));
     save.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); commitOnce(); });
     const cancel = doc.createElement("button");
-    cancel.className = "rm-card-cancel"; cancel.textContent = "✕"; cancel.title = "取消 (Esc)";
+    cancel.className = "rm-card-cancel"; cancel.title = "取消 (Esc)"; cancel.appendChild(createIcon(doc, "x", 14));
     cancel.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); cancelOnce(); });
     actions.append(save, cancel);
     card.appendChild(actions);
@@ -139,7 +157,7 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
       colorsGroup.appendChild(sw);
     }
     const del = doc.createElement("button");
-    del.className = "rm-card-delete"; del.textContent = "🗑"; del.title = "删除";
+    del.className = "rm-card-delete"; del.title = "删除"; del.appendChild(createIcon(doc, "trash", 14));
     del.addEventListener("click", (e) => { e.stopPropagation(); cb.onDelete(input.id); });
     ops.append(colorsGroup, del);
     card.appendChild(ops);
