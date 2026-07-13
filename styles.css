@@ -1,45 +1,95 @@
-/* Reader Margins styles. All classes prefixed rm-. */
+/* Reader Margins - Atomic Utility design system (docs/design.md) */
+/* Flat, no shadows, 1px borders, tonal layering, 4px/8px radii, muted palette. */
+
+/* --- Palette --------------------------------------------------------------- */
+.theme-dark {
+  --rm-surface: #131313;
+  --rm-surface-1: #20201f;
+  --rm-surface-2: #2a2a2a;
+  --rm-surface-3: #353535;
+  --rm-on-surface: #e5e2e1;
+  --rm-on-surface-variant: #c2c7cc;
+  --rm-outline: #8c9196;
+  --rm-outline-variant: #42474b;
+  --rm-primary: #abcbdf;
+  --rm-secondary: #e1c380;
+  --rm-tertiary: #bace97;
+  --rm-error: #ffb4ab;
+}
+.theme-light {
+  --rm-surface: #fafaf8;
+  --rm-surface-1: #f0efed;
+  --rm-surface-2: #e6e5e2;
+  --rm-surface-3: #dbdad7;
+  --rm-on-surface: #1c1b1b;
+  --rm-on-surface-variant: #49454f;
+  --rm-outline: #74777a;
+  --rm-outline-variant: #cacacb;
+  --rm-primary: #2b4a5b;
+  --rm-secondary: #835c00;
+  --rm-tertiary: #4a5d28;
+  --rm-error: #ba1a1a;
+}
+
+/* --- Marks (highlight / underline) ---------------------------------------- */
 .rm-mark-layer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 .rm-mark { position: absolute; pointer-events: none; }
 
-/* Card rails and cards (M-1 tracer) */
+/* --- Card rails ----------------------------------------------------------- */
 .rm-card-rail { position: absolute; top: 0; bottom: 0; width: clamp(120px, 204px, 220px); pointer-events: auto; }
 .rm-card-rail-left { left: 0; }
 .rm-card-rail-right { right: 0; }
-.rm-card { position: relative; display: flex; gap: 6px; padding: 6px 8px; margin-bottom: 8px;
-  background: var(--background-primary-alt, rgba(0,0,0,0.03)); border: 1px solid var(--background-modifier-border, #ccc);
-  border-radius: 4px; max-height: 240px; overflow-y: auto; }
+
+/* --- Cards: flat, 1px border, 8px radius, tonal (Atomic Minimalism) ------- */
+.rm-card {
+  position: relative;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  margin-bottom: 8px;
+  background: var(--rm-surface-1);
+  border: 1px solid var(--rm-outline-variant);
+  border-radius: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  color: var(--rm-on-surface);
+  font-family: "Hanken Grotesk", var(--font-text), var(--default-font), sans-serif;
+}
 .rm-card-strip { width: 3px; flex: 0 0 3px; border-radius: 2px; }
-.rm-card-body { font-size: 12px; color: var(--text-normal); }
-.rm-card-preview { font-style: italic; color: var(--text-muted); }
+.rm-card-body { font-size: 13px; line-height: 18px; color: var(--rm-on-surface); flex: 1; min-width: 0; word-break: break-word; }
+.rm-card-preview { font-style: italic; color: var(--rm-on-surface-variant); }
+
+/* Card operation row (hover/focus-within) */
 .rm-card-ops { display: none; gap: 4px; margin-top: 4px; align-items: center; }
 .rm-card:hover .rm-card-ops, .rm-card:focus-within .rm-card-ops { display: flex; }
 .rm-card-ops-edit { display: flex; }
-.rm-color-swatch { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--background-modifier-border, #ccc); cursor: pointer; padding: 0; }
-.rm-color-swatch:hover { transform: scale(1.15); }
+.rm-color-swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--rm-outline-variant); cursor: pointer; padding: 0; }
+.rm-color-swatch:hover { opacity: 0.85; }
+.rm-color-swatch-default { outline: 1px solid var(--rm-primary); outline-offset: 1px; }
 .rm-card-toggle, .rm-card-delete, .rm-card-save, .rm-card-cancel {
-  background: transparent; border: 1px solid var(--background-modifier-border, #ccc); border-radius: 3px;
-  cursor: pointer; padding: 0 4px; font-size: 11px; color: var(--text-normal); }
-.rm-card-toggle:hover, .rm-card-delete:hover, .rm-card-save:hover, .rm-card-cancel:hover {
-  background: var(--background-modifier-hover, rgba(0,0,0,0.05)); }
-.rm-card-edit { width: 100%; min-height: 40px; font-size: 12px; font-family: inherit;
-  background: var(--background-primary); color: var(--text-normal); border: 1px solid var(--background-modifier-border, #ccc);
-  border-radius: 3px; padding: 4px; resize: vertical; }
+  background: transparent; border: 1px solid var(--rm-outline-variant); border-radius: 4px;
+  cursor: pointer; padding: 0 6px; font-size: 11px; line-height: 16px; color: var(--rm-on-surface);
+}
+.rm-card-toggle:hover, .rm-card-delete:hover, .rm-card-save:hover, .rm-card-cancel:hover { background: var(--rm-surface-2); }
+.rm-card-edit { width: 100%; min-height: 40px; font-size: 13px; line-height: 18px;
+  font-family: inherit; background: var(--rm-surface); color: var(--rm-on-surface);
+  border: 1px solid var(--rm-outline); border-radius: 4px; padding: 4px 6px; resize: vertical; }
+
+/* --- Connector: flat, muted 1px line (no depth) --------------------------- */
 .rm-connector-layer { position: absolute; inset: 0; pointer-events: none; z-index: 100; overflow: visible; }
 
-/* Persistence status indicator (M0) */
-.rm-persistence-status { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
-  margin-left: 6px; vertical-align: middle; font-size: 10px; line-height: 10px; }
-.rm-persistence-saving { background: var(--text-muted, #999); }
-.rm-persistence-failed { background: var(--text-error, #e53935); cursor: help; }
-.rm-persistence-dirty { background: var(--text-warning, #f0ad4e); }
+/* --- Persistence status --------------------------------------------------- */
+.rm-persistence-status { display: inline-block; width: 8px; height: 8px; border-radius: 9999px;
+  margin-left: 6px; vertical-align: middle; }
+.rm-persistence-saving { background: var(--rm-on-surface-variant); }
+.rm-persistence-failed { background: var(--rm-error); cursor: help; }
+.rm-persistence-dirty { background: var(--rm-secondary); }
 
-/* Toolbar (M3) */
+/* --- Toolbar -------------------------------------------------------------- */
 .rm-toolbar-fallback { position: absolute; top: 4px; right: 8px; z-index: 200; display: flex; gap: 4px;
-  align-items: center; padding: 2px 6px; background: var(--background-secondary); border-radius: 4px;
-  border: 1px solid var(--background-modifier-border, #ccc); }
-.rm-toolbar-colors { display: inline-flex; gap: 3px; align-items: center; }
-.rm-toolbar-underline, .rm-toolbar-export { background: transparent; border: 1px solid var(--background-modifier-border, #ccc);
-  border-radius: 3px; cursor: pointer; padding: 2px 6px; font-size: 12px; color: var(--text-normal); }
-.rm-toolbar-underline:hover, .rm-toolbar-export:hover { background: var(--background-modifier-hover, rgba(0,0,0,0.05)); }
-.rm-color-swatch-default { outline: 2px solid var(--text-accent, #7a3); outline-offset: 1px; }
+  align-items: center; padding: 4px 8px; background: var(--rm-surface-1); border-radius: 8px;
+  border: 1px solid var(--rm-outline-variant); }
+.rm-toolbar-colors { display: inline-flex; gap: 4px; align-items: center; }
+.rm-toolbar-underline, .rm-toolbar-export { background: transparent; border: 1px solid var(--rm-outline-variant);
+  border-radius: 4px; cursor: pointer; padding: 2px 6px; font-size: 12px; color: var(--rm-on-surface); }
+.rm-toolbar-underline:hover, .rm-toolbar-export:hover { background: var(--rm-surface-2); }

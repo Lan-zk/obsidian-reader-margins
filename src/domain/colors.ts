@@ -6,10 +6,10 @@ export interface ColorConfigV1 {
 }
 
 export const DEFAULT_COLORS: ColorConfigV1[] = [
-  { id: "yellow", name: "Yellow", value: "#fff15c" },
-  { id: "blue", name: "Blue", value: "#5cc8ff" },
-  { id: "green", name: "Green", value: "#7ee787" },
-  { id: "red", name: "Red", value: "#ff7b72" },
+  { id: "yellow", name: "Yellow", value: "#e1c380" },
+  { id: "blue", name: "Blue", value: "#abcbdf" },
+  { id: "green", name: "Green", value: "#bace97" },
+  { id: "red", name: "Red", value: "#ffb4ab" },
 ];
 
 export const DEFAULT_COLOR_ID = "yellow";

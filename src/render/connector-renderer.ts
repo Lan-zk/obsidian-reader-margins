@@ -17,8 +17,8 @@ export function drawEphemeralConnector(containerEl: HTMLElement, p: ConnectorPoi
   const dx = (p.x2 - p.x1) / 2;
   path.setAttribute("d", `M ${p.x1} ${p.y1} C ${p.x1 + dx} ${p.y1}, ${p.x2 - dx} ${p.y2}, ${p.x2} ${p.y2}`);
   path.setAttribute("stroke", p.color);
-  path.setAttribute("stroke-width", "1.5");
-  path.setAttribute("opacity", "0.6");
+  path.setAttribute("stroke-width", "1");
+  path.setAttribute("opacity", "0.5");
   path.setAttribute("fill", "none");
   svg.appendChild(path);
 }
