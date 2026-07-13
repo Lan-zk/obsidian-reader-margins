@@ -4,8 +4,11 @@ import { probeHostHandles, readCurrentScale, findPageEl, readPdfFingerprint, rea
 import { probeCapabilities } from "src/host/host-capabilities";
 import { DisposableScope } from "src/session/disposable-scope";
 import { SelectionSnapshotController } from "src/session/selection-snapshot-controller";
+import { DraftController } from "src/session/draft-controller";
+import { showUndoNotice } from "src/session/undo-notice";
+import { Notice } from "obsidian";
 import { drawEphemeralMark, clearMarks } from "src/render/mark-renderer";
-import { drawEphemeralCard } from "src/render/annotation-card-rail";
+import { buildCard, type CardCallbacks } from "src/render/annotation-card-rail";
 import { drawEphemeralConnector } from "src/render/connector-renderer";
 import { unionCenter } from "src/domain/pdf-text-anchor";
 import { captureAnchor } from "src/domain/anchor-resolver";
@@ -36,6 +39,8 @@ export class ViewerSession {
   private signature: DocumentSignature | null = null;
   private pendingReconcile = new Set<number>();
   private rafId: number | null = null;
+  private editingId: string | null = null;
+  private draft = new DraftController();
 
   constructor(private view: any, pdfPath: string, private store: DurableAnnotationStore, opts: ViewerSessionOptions = {}) {
     this.pdfPath = pdfPath;
@@ -154,9 +159,28 @@ export class ViewerSession {
       drawEphemeralMark(pageEl, rects, ann.colorValueSnapshot, ann.markStyle, scale);
       const first = rects[0];
       const side: "left" | "right" = unionCenter(rects).x < ann.anchor.geometry.pageWidth / 2 ? "left" : "right";
-      const text = ann.comment ?? ann.anchor.quote.exact.slice(0, 60);
       const markCy = offsetY + first.y * scale;
-      drawEphemeralCard(container, pageEl, { side, text, color: ann.colorValueSnapshot, anchorY: markCy, id: ann.id });
+      // Find or create the side rail, then build the full interactive card.
+      const railClass = side === "left" ? "rm-card-rail-left" : "rm-card-rail-right";
+      let rail = container.querySelector<HTMLElement>(`.${railClass}`);
+      if (!rail) {
+        rail = container.ownerDocument.createElement("div");
+        rail.className = `rm-card-rail ${railClass}`;
+        container.appendChild(rail);
+      }
+      const isEditing = this.editingId === ann.id;
+      buildCard(rail, {
+        id: ann.id,
+        comment: ann.comment,
+        quotePreview: ann.anchor.quote.exact.slice(0, 60),
+        color: ann.colorValueSnapshot,
+        colors: this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name })),
+        markStyle: ann.markStyle,
+        side,
+        anchorY: markCy,
+        editing: isEditing,
+        draftValue: isEditing ? this.draft.peek(ann.id)?.value : undefined,
+      }, this.cardCallbacks());
       const markEdgeX = side === "left" ? offsetX + first.x * scale : offsetX + (first.x + first.width) * scale;
       const cardX = side === "left" ? Math.max(0, offsetX - 30) : offsetX + pageEl.offsetWidth + 30;
       drawEphemeralConnector(container, { x1: markEdgeX, y1: markCy, x2: cardX, y2: markCy, color: ann.colorValueSnapshot, id: ann.id });
@@ -198,6 +222,72 @@ export class ViewerSession {
     return { pdfFingerprint: fp ?? "unknown", numPages: pc };
   }
 
+  private cardCallbacks(): CardCallbacks {
+    const reRender = (id: string) => {
+      const ann = this.store.byId(this.pdfPath, id);
+      if (ann) this.reconcilePage(ann.anchor.pageNumber);
+    };
+    return {
+      onEdit: (id) => {
+        const ann = this.store.byId(this.pdfPath, id);
+        if (!ann) return;
+        this.editingId = id;
+        this.draft.begin(id, ann.revision, ann.comment ?? "");
+        reRender(id);
+      },
+      onCommitComment: (id, value) => {
+        const ann = this.store.byId(this.pdfPath, id);
+        const draft = this.draft.peek(id);
+        const baseRev = draft?.baseRevision ?? ann?.revision ?? 0;
+        this.editingId = null;
+        this.draft.cancel(id);
+        if (!ann) return;
+        const result = this.store.update(this.pdfPath, id, { comment: value }, baseRev);
+        if (!result.ok) new Notice("该批注已在另一窗口修改");
+      },
+      onCancelEdit: (id) => {
+        this.editingId = null;
+        this.draft.cancel(id);
+        reRender(id);
+      },
+      onChangeColor: (id, colorId) => {
+        const ann = this.store.byId(this.pdfPath, id);
+        if (!ann) return;
+        const color = this.store.data.settings.colors.find((c) => c.id === colorId);
+        if (!color) return;
+        this.store.update(this.pdfPath, id, {
+          colorIdSnapshot: color.id, colorLabelSnapshot: color.name, colorValueSnapshot: color.value,
+        }, ann.revision);
+      },
+      onToggleType: (id) => {
+        const ann = this.store.byId(this.pdfPath, id);
+        if (!ann) return;
+        const newStyle = ann.markStyle === "highlight" ? "underline" : "highlight";
+        this.store.update(this.pdfPath, id, { markStyle: newStyle }, ann.revision);
+      },
+      onDelete: (id) => {
+        const ann = this.store.byId(this.pdfPath, id);
+        if (!ann) return;
+        const tombstone = structuredClone(ann);
+        const result = this.store.delete(this.pdfPath, id);
+        if (result.ok) {
+          showUndoNotice("已删除批注", () => {
+            const sig = this.resolveSignature();
+            if (!sig) { new Notice("无法恢复：签名不可用"); return; }
+            this.store.create(this.pdfPath, {
+              markStyle: tombstone.markStyle,
+              colorId: tombstone.colorIdSnapshot ?? this.store.data.settings.defaultColorId,
+              colorLabel: tombstone.colorLabelSnapshot,
+              colorValue: tombstone.colorValueSnapshot,
+              comment: tombstone.comment,
+              anchor: tombstone.anchor,
+            }, sig);
+          });
+        }
+      },
+    };
+  }
+
   dispose(): void {
     if (this.state === "disposed") return;
     this.state = "disposing";
@@ -214,6 +304,7 @@ export class ViewerSession {
       this.handles.viewerEl.querySelectorAll(".rm-mark-layer").forEach((n) => n.remove());
     }
     this.sel.dispose();
+    this.draft.dispose();
     this.scope.disposeAll();
     this.state = "disposed";
   }

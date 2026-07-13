@@ -11,6 +11,20 @@
   border-radius: 4px; max-height: 240px; overflow-y: auto; }
 .rm-card-strip { width: 3px; flex: 0 0 3px; border-radius: 2px; }
 .rm-card-body { font-size: 12px; color: var(--text-normal); }
+.rm-card-preview { font-style: italic; color: var(--text-muted); }
+.rm-card-ops { display: none; gap: 4px; margin-top: 4px; align-items: center; }
+.rm-card:hover .rm-card-ops, .rm-card:focus-within .rm-card-ops { display: flex; }
+.rm-card-ops-edit { display: flex; }
+.rm-color-swatch { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--background-modifier-border, #ccc); cursor: pointer; padding: 0; }
+.rm-color-swatch:hover { transform: scale(1.15); }
+.rm-card-toggle, .rm-card-delete, .rm-card-save, .rm-card-cancel {
+  background: transparent; border: 1px solid var(--background-modifier-border, #ccc); border-radius: 3px;
+  cursor: pointer; padding: 0 4px; font-size: 11px; color: var(--text-normal); }
+.rm-card-toggle:hover, .rm-card-delete:hover, .rm-card-save:hover, .rm-card-cancel:hover {
+  background: var(--background-modifier-hover, rgba(0,0,0,0.05)); }
+.rm-card-edit { width: 100%; min-height: 40px; font-size: 12px; font-family: inherit;
+  background: var(--background-primary); color: var(--text-normal); border: 1px solid var(--background-modifier-border, #ccc);
+  border-radius: 3px; padding: 4px; resize: vertical; }
 .rm-connector-layer { position: absolute; inset: 0; pointer-events: none; z-index: 100; overflow: visible; }
 
 /* Persistence status indicator (M0) */
