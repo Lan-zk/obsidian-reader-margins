@@ -30,4 +30,8 @@ export class Setting {
   addButton(_cb: any) { return this; }
 }
 export class PluginSettingTab extends Setting {}
+export class TFile {}
+export function normalizePath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/|\/$/g, "");
+}
 export function loadPdfJs(): Promise<unknown> { return Promise.resolve({}); }

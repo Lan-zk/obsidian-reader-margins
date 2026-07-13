@@ -14,6 +14,8 @@ import { drawEphemeralConnector } from "src/render/connector-renderer";
 import { layoutCards } from "src/render/card-layout-engine";
 import { unionCenter } from "src/domain/pdf-text-anchor";
 import { captureAnchor } from "src/domain/anchor-resolver";
+import { ExportModal } from "src/export/export-modal";
+import { MarkdownExportService } from "src/export/markdown-export-service";
 import type { DurableAnnotationStore } from "src/store/durable-annotation-store";
 import type { AnnotationRecordV1, DocumentSignature, MutationResult } from "src/domain/annotation";
 
@@ -118,7 +120,7 @@ export class ViewerSession {
     this.toolbar.render({
       onColor: (colorId) => { const r = this.createAnnotation("highlight", colorId); if (!r.ok) new Notice(r.reason); },
       onUnderline: () => { const r = this.createAnnotation("underline"); if (!r.ok) new Notice(r.reason); },
-      onExport: () => { new Notice("Export coming soon (M4)"); },
+      onExport: () => this.openExport(),
     });
     const unsubStatus = this.store.onStatus((s) => this.toolbar?.setStatus(s));
     this.scope.addDispose(unsubStatus);
@@ -253,6 +255,16 @@ export class ViewerSession {
     }, sig);
     if (result.ok) snap.win.getSelection()?.removeAllRanges();
     return result;
+  }
+
+  private openExport(): void {
+    const app = (this.view as any).app;
+    if (!app) { new Notice("无法导出：应用不可用"); return; }
+    const annotations = this.store.byPath(this.pdfPath);
+    const doc = this.store.data.documents[this.pdfPath];
+    if (!doc || annotations.length === 0) { new Notice("当前 PDF 没有批注"); return; }
+    const service = new MarkdownExportService(app);
+    new ExportModal(app, this.pdfPath, annotations, { documentId: doc.documentId, documentRevision: doc.revision }, service).open();
   }
 
   private resolveSignature(): DocumentSignature | null {
