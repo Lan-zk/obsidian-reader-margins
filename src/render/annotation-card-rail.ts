@@ -90,24 +90,27 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     ta.value = input.draftValue ?? input.comment ?? "";
     body.appendChild(ta);
     card.appendChild(body);
-    // Operation row (save/cancel visible in edit mode)
     const ops = doc.createElement("div");
     ops.className = "rm-card-ops rm-card-ops-edit";
+    // Use a done flag + mousedown(preventDefault) so save/cancel don't also trigger blur->commit.
+    let done = false;
+    const commitOnce = () => { if (done) return; done = true; cb.onCommitComment(input.id, ta.value); };
+    const cancelOnce = () => { if (done) return; done = true; cb.onCancelEdit(input.id); };
     const save = doc.createElement("button");
     save.className = "rm-card-save"; save.textContent = "✓"; save.title = "Save (Cmd+Enter)";
-    save.addEventListener("click", (e) => { e.stopPropagation(); cb.onCommitComment(input.id, ta.value); });
+    save.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); commitOnce(); });
     const cancel = doc.createElement("button");
     cancel.className = "rm-card-cancel"; cancel.textContent = "✕"; cancel.title = "Cancel (Esc)";
-    cancel.addEventListener("click", (e) => { e.stopPropagation(); cb.onCancelEdit(input.id); });
+    cancel.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); cancelOnce(); });
     ops.append(save, cancel);
     card.appendChild(ops);
     // Focus + keyboard shortcuts
     queueMicrotask(() => ta.focus());
     ta.addEventListener("keydown", (ev) => {
-      if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") { ev.preventDefault(); cb.onCommitComment(input.id, ta.value); }
-      else if (ev.key === "Escape") { ev.preventDefault(); cb.onCancelEdit(input.id); }
+      if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") { ev.preventDefault(); commitOnce(); }
+      else if (ev.key === "Escape") { ev.preventDefault(); cancelOnce(); }
     });
-    ta.addEventListener("blur", () => cb.onCommitComment(input.id, ta.value));
+    ta.addEventListener("blur", () => commitOnce());
   } else {
     body.textContent = input.comment ?? input.quotePreview;
     card.appendChild(body);
