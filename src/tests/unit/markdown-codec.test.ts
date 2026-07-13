@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderSnapshot, escapeCalloutLine, escapeHtml } from "src/export/markdown-codec";
+import { renderSnapshot, escapeHtml } from "src/export/markdown-codec";
 import type { AnnotationRecordV1 } from "src/domain/annotation";
 
 const ann = (over: any = {}): AnnotationRecordV1 => ({
@@ -22,50 +22,57 @@ const base = (annotations: AnnotationRecordV1[]) => ({
 });
 
 describe("MarkdownCodec", () => {
-  it("renders frontmatter + header + callout", () => {
+  it("renders frontmatter + header", () => {
     const md = renderSnapshot(base([ann()]));
     expect(md).toContain("reader-margins-export: true");
     expect(md).toContain('reader-margins-document-id: "doc-1"');
     expect(md).toContain("reader-margins-document-revision: 42");
     expect(md).toContain("# example 批注");
-    expect(md).toContain("> [!quote]");
-    expect(md).toContain("被标注文本");
-    expect(md).toContain('id="a1" revision="3"');
   });
-  it("renders highlight color via <mark> with inline background-color", () => {
+  it("tints the whole blockquote with the annotation color", () => {
     const md = renderSnapshot(base([ann()]));
-    expect(md).toContain('<mark style="background-color: #fff15c;">被标注文本</mark>');
+    expect(md).toContain('<blockquote style="border-left: 4px solid #fff15c; background-color: rgba(255, 241, 92, 0.14);');
+    expect(md).toContain("被标注文本");
   });
-  it("renders underline color via <u> with inline text-decoration-color", () => {
-    const md = renderSnapshot(base([ann({ markStyle: "underline", colorValueSnapshot: "#5cc8ff" })]));
-    expect(md).toContain('<u style="text-decoration-color: #5cc8ff; text-decoration-thickness: 2px;">被标注文本</u>');
-  });
-  it("separates quote and comment with a 批注 heading", () => {
+  it("places quote and comment in separate <p> with a 批注 heading", () => {
     const md = renderSnapshot(base([ann({ comment: "我的笔记" })]));
-    expect(md).toContain("**批注**");
+    expect(md).toContain("<p>被标注文本</p>");
+    expect(md).toContain("<p><strong>批注</strong></p>");
     expect(md).toContain("我的笔记");
-    // comment heading comes after the quoted text
-    expect(md.indexOf("被标注文本")).toBeLessThan(md.indexOf("**批注**"));
+    expect(md.indexOf("被标注文本")).toBeLessThan(md.indexOf("<strong>批注</strong>"));
   });
-  it("escapes line-leading > in text", () => {
-    expect(escapeCalloutLine("> blockquote trick")).toBe("\\> blockquote trick");
+  it("omits comment block when comment is empty", () => {
+    const md = renderSnapshot(base([ann()]));
+    expect(md).not.toContain("<strong>批注</strong>");
   });
-  it("escapes HTML-special characters in quote text", () => {
-    expect(escapeHtml("a<b>&c")).toBe("a&lt;b&gt;&amp;c");
+  it("does not emit an id/revision HTML comment (export is one-way)", () => {
+    const md = renderSnapshot(base([ann()]));
+    expect(md).not.toContain("reader-margins:annotation");
+    expect(md).not.toContain('id="a1"');
   });
-  it("replaces newlines in text with spaces inside callout body", () => {
+  it("escapes HTML-special characters", () => {
+    expect(escapeHtml('a<b>&"c')).toBe('a&lt;b&gt;&amp;&quot;c');
+    const md = renderSnapshot(base([ann({ anchor: { pageNumber: 1, quote: { exact: "<script>" }, geometry: { pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 0, y: 0, width: 1, height: 1 }] } } })]));
+    expect(md).toContain("&lt;script&gt;");
+    expect(md).not.toContain("<script>");
+  });
+  it("replaces newlines in quote with spaces", () => {
     const md = renderSnapshot(base([ann({ anchor: { pageNumber: 1, quote: { exact: "line1\nline2" }, geometry: { pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 0, y: 0, width: 1, height: 1 }] } } })]));
     expect(md).toContain("line1 line2");
     expect(md).not.toContain("line1\nline2");
   });
-  it("omits comment block when comment is empty", () => {
-    const md = renderSnapshot(base([ann()]));
-    expect(md).not.toContain("用户批注");
-    expect(md).not.toContain("**批注**");
+  it("preserves newlines in comments as <br>", () => {
+    const md = renderSnapshot(base([ann({ comment: "第一行\n第二行" })]));
+    expect(md).toContain("第一行<br>第二行");
   });
-  it("escapes backticks and brackets in paths", () => {
+  it("emits a wikilink with page anchor above the blockquote", () => {
     const md = renderSnapshot(base([ann()]));
-    // path with ] and # must be escaped so the wikilink stays valid
-    expect(md).toMatch(/\[\[.*\]\]/);
+    expect(md).toMatch(/\[\[Books\/example\.pdf#page=12\|第 12 页\]\]/);
+    // link comes before the blockquote
+    expect(md.indexOf("[[Books/example.pdf#page=12")).toBeLessThan(md.indexOf("<blockquote"));
+  });
+  it("escapes brackets and # in wikilink paths", () => {
+    const md = renderSnapshot({ pdfBaseName: "weird", pdfPath: "a]b#c.pdf", documentId: "d", documentRevision: 1, exportedAt: "2026-07-12T12:00:00+08:00", annotations: [ann()] });
+    expect(md).toMatch(/\[\[a\\]b\\#c\.pdf#page=12/);
   });
 });

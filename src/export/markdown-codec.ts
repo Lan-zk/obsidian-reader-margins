@@ -1,5 +1,12 @@
 // src/export/markdown-codec.ts
 // Pure snapshot renderer (spec §15.4). No DOM, no obsidian - unit-testable.
+//
+// Design note: the annotation color is rendered on the whole quote block via an
+// HTML <blockquote style="..."> (left border + tinted background), mirroring the
+// PDF++ export look. A plain Markdown ">" blockquote cannot take inline color, so
+// we use HTML. The page link stays a wikilink (kept outside the blockquote so
+// Obsidian resolves it). The id/revision HTML comment is dropped: export is a
+// one-way snapshot (spec §15.1) with no re-import, so it carried no consumer.
 import type { AnnotationRecordV1, MarkStyle } from "src/domain/annotation";
 import { computeSortKey } from "src/domain/pdf-text-anchor";
 import { validateHexColor } from "src/domain/colors";
@@ -13,14 +20,10 @@ export interface SnapshotInput {
   annotations: AnnotationRecordV1[];
 }
 
-// Escape a line so it cannot break out of a callout block (> prefix).
-export function escapeCalloutLine(text: string): string {
-  return text.replace(/^>/gm, "\\>");
-}
-
-// Escape HTML-special characters so untrusted quote text is safe inside <mark>/<u>.
+// Escape HTML-special characters (including ") so untrusted text is safe both as
+// element text and inside attribute values.
 export function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 // Escape ] and # inside a wikilink target so the link stays valid (spec §15.5).
@@ -32,16 +35,18 @@ function styleLabel(s: MarkStyle): string {
   return s === "highlight" ? "高亮" : "下划线";
 }
 
-// Wrap quote text in a colored <mark> (highlight) or <u> (underline) so the
-// annotation color renders in Obsidian's reading view (cf. PDF++ export).
-// Color is re-validated; an invalid value falls back to a neutral swatch.
-function styledQuote(exact: string, markStyle: MarkStyle, colorRaw: string): string {
-  const safe = escapeHtml(exact.replace(/\n/g, " "));
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const m = /^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/.exec(hex);
+  if (!m) return null;
+  return { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
+}
+
+// Open an HTML blockquote tinted with the annotation color (left border + faint
+// background) so the whole quote block renders the color in reading view.
+function styledBlockquoteOpen(colorRaw: string): string {
   const color = validateHexColor(colorRaw) ?? "#cccccc";
-  if (markStyle === "underline") {
-    return `<u style="text-decoration-color: ${color}; text-decoration-thickness: 2px;">${safe}</u>`;
-  }
-  return `<mark style="background-color: ${color};">${safe}</mark>`;
+  const rgb = hexToRgb(color) ?? { r: 204, g: 204, b: 204 };
+  return `<blockquote style="border-left: 4px solid ${color}; background-color: rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.14); margin: 4px 0; padding: 8px 12px;">`;
 }
 
 export function renderSnapshot(input: SnapshotInput): string {
@@ -72,18 +77,17 @@ export function renderSnapshot(input: SnapshotInput): string {
   for (const ann of sorted) {
     const page = ann.anchor.pageNumber;
     const link = `[[${escapeWikilinkPath(input.pdfPath)}#page=${page}|第 ${page} 页]]`;
-    // HTML comment carries id+revision for future reconciliation (spec §15.4).
-    // It is invisible in reading view.
-    lines.push(`<!-- reader-margins:annotation id="${ann.id}" revision="${ann.revision}" -->`);
-    lines.push(`> [!quote] ${link} · ${styleLabel(ann.markStyle)}`);
-    lines.push(`> ${styledQuote(ann.anchor.quote.exact, ann.markStyle, ann.colorValueSnapshot)}`);
+    // Page link stays a wikilink (outside the blockquote) so Obsidian resolves it.
+    lines.push(`${link} · ${styleLabel(ann.markStyle)}`);
+    lines.push("");
+    lines.push(styledBlockquoteOpen(ann.colorValueSnapshot));
+    lines.push(`<p>${escapeHtml(ann.anchor.quote.exact.replace(/\n/g, " "))}</p>`);
     if (ann.comment && ann.comment.trim()) {
-      lines.push(">");
-      lines.push("> **批注**");
-      for (const line of ann.comment.split("\n")) {
-        lines.push(`> ${escapeCalloutLine(line)}`);
-      }
+      lines.push(`<p><strong>批注</strong></p>`);
+      const commentHtml = escapeHtml(ann.comment).replace(/\n/g, "<br>");
+      lines.push(`<p>${commentHtml}</p>`);
     }
+    lines.push(`</blockquote>`);
     lines.push("");
   }
   return lines.join("\n");
