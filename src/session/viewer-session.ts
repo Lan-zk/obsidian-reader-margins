@@ -12,7 +12,7 @@ import { drawEphemeralMark, clearMarks } from "src/render/mark-renderer";
 import { buildCard, type CardCallbacks } from "src/render/annotation-card-rail";
 import { drawEphemeralConnector } from "src/render/connector-renderer";
 import { layoutCards } from "src/render/card-layout-engine";
-import { unionCenter } from "src/domain/pdf-text-anchor";
+import { unionCenter, cleanGeometry } from "src/domain/pdf-text-anchor";
 import { captureAnchor } from "src/domain/anchor-resolver";
 import { ExportModal } from "src/export/export-modal";
 import { MarkdownExportService } from "src/export/markdown-export-service";
@@ -192,7 +192,9 @@ export class ViewerSession {
     type Entry = { ann: AnnotationRecordV1; card: HTMLElement; anchorY: number; markCenterY: number; markEdgeX: number };
     const bySide: Record<"left" | "right", Entry[]> = { left: [], right: [] };
     for (const ann of anns) {
-      const rects = ann.anchor.geometry.rects;
+      // Re-clean stored rects at render time so already-saved annotations also
+      // get vertical-overlap trimming (prevents double-tinted highlight divs).
+      const rects = cleanGeometry(ann.anchor.geometry.rects, ann.anchor.geometry.pageWidth, ann.anchor.geometry.pageHeight);
       drawEphemeralMark(pageEl, rects, ann.colorValueSnapshot, ann.markStyle, scale);
       const first = rects[0];
       const side: "left" | "right" = unionCenter(rects).x < ann.anchor.geometry.pageWidth / 2 ? "left" : "right";

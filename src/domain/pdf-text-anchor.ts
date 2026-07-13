@@ -46,6 +46,17 @@ export function cleanGeometry(rects: AnchorRect[], pageW: number, pageH: number)
       merged.push({ ...r });
     }
   }
+  // Trim vertical overlap between consecutive different-line rects. PDF text
+  // items often have height > line gap, so raw clientRects overlap in y; without
+  // this, stacked highlight divs double-tint the overlap (spec §9.4). Shrinking
+  // the earlier rect's bottom preserves total coverage without stacking.
+  for (let i = 1; i < merged.length; i++) {
+    const prev = merged[i - 1];
+    const cur = merged[i];
+    if (cur.y > prev.y && cur.y < prev.y + prev.height) {
+      prev.height = cur.y - prev.y;
+    }
+  }
   return merged;
 }
 
