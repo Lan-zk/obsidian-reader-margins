@@ -33,6 +33,20 @@ describe("ephemeral render (M-1 tracer)", () => {
     clearMarks(pages[0].el);
     expect(pages[0].el.querySelector(".rm-mark-layer")).toBeNull();
   });
+  it("clearMarks removes every stray mark layer (no duplicate marks)", () => {
+    const { pages } = buildHostFixture({});
+    const pageEl = pages[0].el;
+    // Simulate stray layers left behind by a rebuilt page.
+    for (let i = 0; i < 2; i++) {
+      const stray = pageEl.ownerDocument.createElement("div");
+      stray.className = "rm-mark-layer";
+      stray.appendChild(pageEl.ownerDocument.createElement("div"));
+      pageEl.appendChild(stray);
+    }
+    expect(pageEl.querySelectorAll(".rm-mark-layer")).toHaveLength(2);
+    clearMarks(pageEl);
+    expect(pageEl.querySelectorAll(".rm-mark-layer")).toHaveLength(0);
+  });
   it("draws a card on the right rail with a color strip", () => {
     const { containerEl, pages } = buildHostFixture({ marginWidthPx: 200 });
     drawEphemeralCard(containerEl, pages[0].el, { side: "right", text: "hello", color: "#fff15c", anchorY: 20 });

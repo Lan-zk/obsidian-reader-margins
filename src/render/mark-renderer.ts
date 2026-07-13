@@ -38,5 +38,7 @@ export function drawEphemeralMark(
 }
 
 export function clearMarks(pageEl: HTMLElement): void {
-  pageEl.querySelector(".rm-mark-layer")?.remove();
+  // Remove ALL mark layers (defensive: a stray second layer should not leave
+  // duplicate marks behind). Normal case is exactly one.
+  pageEl.querySelectorAll(".rm-mark-layer").forEach((n) => n.remove());
 }
