@@ -1,13 +1,13 @@
-import { Plugin, WorkspaceLeaf, Notice } from "obsidian";
+import { Plugin, Notice } from "obsidian";
 import { DurableAnnotationStore } from "src/store/durable-annotation-store";
-import { ViewerSession } from "src/session/viewer-session";
+import { PdfViewManager } from "src/session/pdf-view-manager";
 import { ReaderMarginsSettingsTab } from "src/settings/settings-tab";
 import { DiagnosticsReporter } from "src/diagnostics/diagnostics-reporter";
 
 export default class ReaderMarginsPlugin extends Plugin {
   store!: DurableAnnotationStore;
   diagnostics = new DiagnosticsReporter();
-  private sessions = new Map<WorkspaceLeaf, ViewerSession>();
+  private viewManager!: PdfViewManager;
 
   async onload() {
     // loadPdfJs is an Obsidian global; guard in case it's unavailable in this build.
@@ -27,12 +27,12 @@ export default class ReaderMarginsPlugin extends Plugin {
     if (state === "future" || state === "invalid") {
       new Notice(`Reader Margins: ${state} data.json; annotations disabled to prevent overwrite.`, 10000);
     }
-    this.registerEvent(this.app.workspace.on("layout-change", () => this.reconcileLeaves()));
-    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.reconcileLeaves()));
-    this.app.workspace.iterateAllLeaves((leaf) => this.attachLeaf(leaf));
+    this.viewManager = new PdfViewManager(this.store, () =>
+      this.diagnostics.set("sessionCount", this.viewManager.sessionCount));
+    this.viewManager.start(this);
     this.addSettingTab(new ReaderMarginsSettingsTab(this.app, this));
     this.registerCommands();
-    this.register(() => { this.destroyAll(); this.store.flushBestEffort(); });
+    this.register(() => { this.viewManager.stop(); this.store.flushBestEffort(); });
   }
 
   private registerCommands() {
@@ -40,7 +40,7 @@ export default class ReaderMarginsPlugin extends Plugin {
       id: "highlight-selection",
       name: "Highlight selected text (default color)",
       checkCallback: (checking) => {
-        const session = this.activePdfSession();
+        const session = this.viewManager.activeSession();
         if (!session || !session.hasSelection()) return false;
         if (checking) return true;
         const result = session.createAnnotation("highlight");
@@ -51,7 +51,7 @@ export default class ReaderMarginsPlugin extends Plugin {
       id: "underline-and-comment",
       name: "Underline and comment selected text",
       checkCallback: (checking) => {
-        const session = this.activePdfSession();
+        const session = this.viewManager.activeSession();
         if (!session || !session.hasSelection()) return false;
         if (checking) return true;
         const result = session.createAnnotation("underline");
@@ -60,30 +60,7 @@ export default class ReaderMarginsPlugin extends Plugin {
     });
   }
 
-  private activePdfSession(): ViewerSession | null {
-    const leaf = this.app.workspace.activeLeaf;
-    if (!leaf) return null;
-    return this.sessions.get(leaf) ?? null;
+  onunload() {
+    this.viewManager?.stop();
   }
-
-  private reconcileLeaves() {
-    this.app.workspace.iterateAllLeaves((leaf) => this.attachLeaf(leaf));
-    this.diagnostics.set("sessionCount", this.sessions.size);
-  }
-
-  private attachLeaf(leaf: WorkspaceLeaf) {
-    const view: any = leaf.view;
-    if (!view || view.getViewType?.() !== "pdf") return;
-    if (this.sessions.has(leaf)) return;
-    const session = new ViewerSession(view, view.file?.path ?? "", this.store);
-    this.sessions.set(leaf, session);
-    session.attach().catch((e) => console.error("reader-margins attach failed", e));
-  }
-
-  private destroyAll() {
-    for (const s of this.sessions.values()) s.dispose();
-    this.sessions.clear();
-  }
-
-  onunload() { this.destroyAll(); }
 }
