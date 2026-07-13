@@ -15,7 +15,8 @@ export function drawEphemeralMark(
     layer.className = "rm-mark-layer";
     pageEl.appendChild(layer);
   }
-  layer.innerHTML = "";
+  // NOTE: do NOT clear here - clearMarks() at render start handles it, so multiple
+  // annotations on the same page accumulate their marks instead of overwriting.
   for (const r of rects) {
     const el = pageEl.ownerDocument.createElement("div");
     el.className = "rm-mark";

@@ -11,10 +11,11 @@ import { Notice } from "obsidian";
 import { drawEphemeralMark, clearMarks } from "src/render/mark-renderer";
 import { buildCard, type CardCallbacks } from "src/render/annotation-card-rail";
 import { drawEphemeralConnector } from "src/render/connector-renderer";
+import { layoutCards } from "src/render/card-layout-engine";
 import { unionCenter } from "src/domain/pdf-text-anchor";
 import { captureAnchor } from "src/domain/anchor-resolver";
 import type { DurableAnnotationStore } from "src/store/durable-annotation-store";
-import type { DocumentSignature, MutationResult } from "src/domain/annotation";
+import type { AnnotationRecordV1, DocumentSignature, MutationResult } from "src/domain/annotation";
 
 export type SessionState = "discovered" | "probing" | "attached" | "degraded" | "disposing" | "disposed";
 
@@ -169,13 +170,15 @@ export class ViewerSession {
       node = node.offsetParent as HTMLElement | null;
     }
 
+    // First pass: draw marks, create cards (unpositioned), group by side.
+    type Entry = { ann: AnnotationRecordV1; card: HTMLElement; anchorY: number; markCenterY: number; markEdgeX: number };
+    const bySide: Record<"left" | "right", Entry[]> = { left: [], right: [] };
     for (const ann of anns) {
       const rects = ann.anchor.geometry.rects;
       drawEphemeralMark(pageEl, rects, ann.colorValueSnapshot, ann.markStyle, scale);
       const first = rects[0];
       const side: "left" | "right" = unionCenter(rects).x < ann.anchor.geometry.pageWidth / 2 ? "left" : "right";
-      const markCy = offsetY + first.y * scale;
-      // Find or create the side rail, then build the full interactive card.
+      const markCenterY = offsetY + (first.y + first.height / 2) * scale;
       const railClass = side === "left" ? "rm-card-rail-left" : "rm-card-rail-right";
       let rail = container.querySelector<HTMLElement>(`.${railClass}`);
       if (!rail) {
@@ -186,20 +189,36 @@ export class ViewerSession {
       const isEditing = this.editingId === ann.id;
       const quoteText = ann.anchor.quote.exact;
       const quote = quoteText.length > 60 ? quoteText.slice(0, 60) + "…" : quoteText;
-      buildCard(rail, {
-        id: ann.id,
-        quote,
-        comment: ann.comment,
-        color: ann.colorValueSnapshot,
+      const card = buildCard(rail, {
+        id: ann.id, quote, comment: ann.comment, color: ann.colorValueSnapshot,
         colors: this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name })),
-        side,
-        anchorY: markCy,
-        editing: isEditing,
+        side, anchorY: markCenterY, editing: isEditing,
         draftValue: isEditing ? this.draft.peek(ann.id)?.value : undefined,
       }, this.cardCallbacks());
       const markEdgeX = side === "left" ? offsetX + first.x * scale : offsetX + (first.x + first.width) * scale;
-      const cardX = side === "left" ? Math.max(0, offsetX - 30) : offsetX + pageEl.offsetWidth + 30;
-      drawEphemeralConnector(container, { x1: markEdgeX, y1: markCy, x2: cardX, y2: markCy, color: ann.colorValueSnapshot, id: ann.id });
+      bySide[side].push({ ann, card, anchorY: markCenterY, markCenterY, markEdgeX });
+    }
+
+    // Second pass: layout each side (push-down to avoid overlap), apply positions, draw connectors.
+    const pageHeight = pageEl.offsetHeight;
+    const containerWidth = container.offsetWidth;
+    for (const side of ["left", "right"] as const) {
+      const group = bySide[side];
+      if (group.length === 0) continue;
+      const out = layoutCards({
+        pageHeight, railScrollTop: 0, railViewportHeight: pageHeight,
+        entries: group.map((g) => ({ annotationId: g.ann.id, anchorY: g.anchorY, cardHeight: g.card.offsetHeight || 40 })),
+      });
+      const rail = container.querySelector<HTMLElement>(side === "left" ? ".rm-card-rail-left" : ".rm-card-rail-right");
+      const railWidth = rail?.offsetWidth ?? 0;
+      const cardEdgeX = side === "left" ? railWidth : containerWidth - railWidth;
+      for (const g of group) {
+        const pos = out.positions.get(g.ann.id);
+        if (pos) g.card.style.top = `${pos.top}px`;
+        const cardHeight = g.card.offsetHeight || 40;
+        const cardCenterY = (pos?.top ?? g.anchorY) + cardHeight / 2;
+        drawEphemeralConnector(container, { x1: g.markEdgeX, y1: g.markCenterY, x2: cardEdgeX, y2: cardCenterY, color: g.ann.colorValueSnapshot, id: g.ann.id });
+      }
     }
   }
 
