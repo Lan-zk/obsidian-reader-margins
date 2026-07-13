@@ -30,8 +30,15 @@ export function probeHostHandles(view: unknown): HostHandles | null {
   if (!isElement(viewerEl)) return null;
   const eventBus = obsidianViewer.eventBus ?? pdfJsViewer.eventBus ?? null;
 
-  // Toolbar slot: look for the dedicated toolbar-right region.
-  const toolbarSlot = viewerContainerEl.querySelector<HTMLElement>(".pdf-toolbar-right") ?? undefined;
+  // view.containerEl is the PDF view root (standard FileView property).
+  const viewContainerEl: HTMLElement = isElement((view as any).containerEl) ? (view as any).containerEl : viewerContainerEl;
+
+  // Toolbar slot: search the view container broadly (it may live outside viewerContainerEl).
+  const toolbarSlot =
+    viewContainerEl.querySelector<HTMLElement>(".pdf-toolbar-right") ??
+    viewerContainerEl.querySelector<HTMLElement>(".pdf-toolbar-right") ??
+    viewContainerEl.querySelector<HTMLElement>(".pdf-toolbar") ??
+    undefined;
 
   return {
     pdfViewerComponent: component,
@@ -41,6 +48,7 @@ export function probeHostHandles(view: unknown): HostHandles | null {
     eventBus,
     viewerContainerEl,
     viewerEl,
+    viewContainerEl,
     toolbarSlot: toolbarSlot ?? undefined,
   };
 }

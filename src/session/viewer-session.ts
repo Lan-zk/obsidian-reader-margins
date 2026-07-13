@@ -6,6 +6,7 @@ import { DisposableScope } from "src/session/disposable-scope";
 import { SelectionSnapshotController } from "src/session/selection-snapshot-controller";
 import { DraftController } from "src/session/draft-controller";
 import { showUndoNotice } from "src/session/undo-notice";
+import { ToolbarController } from "src/toolbar/toolbar-controller";
 import { Notice } from "obsidian";
 import { drawEphemeralMark, clearMarks } from "src/render/mark-renderer";
 import { buildCard, type CardCallbacks } from "src/render/annotation-card-rail";
@@ -41,6 +42,7 @@ export class ViewerSession {
   private rafId: number | null = null;
   private editingId: string | null = null;
   private draft = new DraftController();
+  private toolbar: ToolbarController | null = null;
 
   constructor(private view: any, pdfPath: string, private store: DurableAnnotationStore, opts: ViewerSessionOptions = {}) {
     this.pdfPath = pdfPath;
@@ -108,6 +110,18 @@ export class ViewerSession {
     this.state = "attached";
     const pages = h.viewerEl.querySelectorAll<HTMLElement>(".page[data-page-number]");
     pages.forEach((p) => this.reconcilePage(parseInt(p.dataset.pageNumber ?? "", 10)));
+
+    // Toolbar (color swatches / underline / export / persistence status)
+    const colors = this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name }));
+    this.toolbar = new ToolbarController(h, colors, this.store.data.settings.defaultColorId);
+    this.toolbar.render({
+      onColor: (colorId) => { const r = this.createAnnotation("highlight", colorId); if (!r.ok) new Notice(r.reason); },
+      onUnderline: () => { const r = this.createAnnotation("underline"); if (!r.ok) new Notice(r.reason); },
+      onExport: () => { new Notice("Export coming soon (M4)"); },
+    });
+    const unsubStatus = this.store.onStatus((s) => this.toolbar?.setStatus(s));
+    this.scope.addDispose(unsubStatus);
+    this.scope.addDispose(() => { this.toolbar?.dispose(); this.toolbar = null; });
   }
 
   // M0: render annotations from the store for this page.

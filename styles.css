@@ -33,3 +33,13 @@
 .rm-persistence-saving { background: var(--text-muted, #999); }
 .rm-persistence-failed { background: var(--text-error, #e53935); cursor: help; }
 .rm-persistence-dirty { background: var(--text-warning, #f0ad4e); }
+
+/* Toolbar (M3) */
+.rm-toolbar-fallback { position: absolute; top: 4px; right: 8px; z-index: 200; display: flex; gap: 4px;
+  align-items: center; padding: 2px 6px; background: var(--background-secondary); border-radius: 4px;
+  border: 1px solid var(--background-modifier-border, #ccc); }
+.rm-toolbar-colors { display: inline-flex; gap: 3px; align-items: center; }
+.rm-toolbar-underline, .rm-toolbar-export { background: transparent; border: 1px solid var(--background-modifier-border, #ccc);
+  border-radius: 3px; cursor: pointer; padding: 2px 6px; font-size: 12px; color: var(--text-normal); }
+.rm-toolbar-underline:hover, .rm-toolbar-export:hover { background: var(--background-modifier-hover, rgba(0,0,0,0.05)); }
+.rm-color-swatch-default { outline: 2px solid var(--text-accent, #7a3); outline-offset: 1px; }

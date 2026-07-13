@@ -10,6 +10,7 @@ export interface HostHandles {
   eventBus: unknown;                // PDF.js EventBus
   viewerContainerEl: HTMLElement;   // obsidianViewer.dom.viewerContainerEl
   viewerEl: HTMLElement;            // obsidianViewer.dom.viewerEl
+  viewContainerEl: HTMLElement;     // view.containerEl (PDF view root - toolbar lives here)
   toolbarSlot?: HTMLElement;        // probed toolbar container
 }
 
