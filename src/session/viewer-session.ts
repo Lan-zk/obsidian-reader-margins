@@ -184,13 +184,14 @@ export class ViewerSession {
         container.appendChild(rail);
       }
       const isEditing = this.editingId === ann.id;
+      const quoteText = ann.anchor.quote.exact;
+      const quote = quoteText.length > 120 ? quoteText.slice(0, 120) + "…" : quoteText;
       buildCard(rail, {
         id: ann.id,
+        quote,
         comment: ann.comment,
-        quotePreview: ann.anchor.quote.exact.slice(0, 60),
         color: ann.colorValueSnapshot,
         colors: this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name })),
-        markStyle: ann.markStyle,
         side,
         anchorY: markCy,
         editing: isEditing,
@@ -281,12 +282,6 @@ export class ViewerSession {
         this.store.update(this.pdfPath, id, {
           colorIdSnapshot: color.id, colorLabelSnapshot: color.name, colorValueSnapshot: color.value,
         }, ann.revision);
-      },
-      onToggleType: (id) => {
-        const ann = this.store.byId(this.pdfPath, id);
-        if (!ann) return;
-        const newStyle = ann.markStyle === "highlight" ? "underline" : "highlight";
-        this.store.update(this.pdfPath, id, { markStyle: newStyle }, ann.revision);
       },
       onDelete: (id) => {
         const ann = this.store.byId(this.pdfPath, id);

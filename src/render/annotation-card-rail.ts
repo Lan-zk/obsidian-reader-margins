@@ -46,23 +46,26 @@ export interface CardCallbacks {
   onCommitComment: (id: string, value: string) => void;
   onCancelEdit: (id: string) => void;
   onChangeColor: (id: string, colorId: string) => void;
-  onToggleType: (id: string) => void;
   onDelete: (id: string) => void;
 }
 export interface BuildCardInput {
   id: string;
-  comment?: string;
-  quotePreview: string;
+  quote: string;          // 高亮的原文 (always shown)
+  comment?: string;       // 用户批注的内容 (shown when present)
   color: string;
   colors: { id: string; value: string; label: string }[];
-  markStyle: "highlight" | "underline";
   side: "left" | "right";
   anchorY: number;
   editing?: boolean;
   draftValue?: string;
 }
 
-// Full card with color strip, body, and hover operation row (spec §3.1, §5.2).
+// Card layout (docs/design.md + user spec):
+//   ┌────────────────────────┐
+//   │▌ "quoted original text"  │  ← 原文 (muted, italic)
+//   │▌ user comment            │  ← 批注 (normal)
+//   │▌ ● ● ● ●  🗑              │  ← color swatches + delete (hover)
+//   └────────────────────────┘
 // All text via textContent; never innerHTML (spec §14.1).
 export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCallbacks): HTMLElement {
   const doc = parent.ownerDocument;
@@ -75,36 +78,43 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
   card.style.position = "absolute";
   card.style.top = `${input.anchorY}px`;
 
+  // 划线: 3px color strip on the card's page-facing edge.
   const strip = doc.createElement("div");
   strip.className = "rm-card-strip";
   strip.style.background = input.color;
   card.appendChild(strip);
 
-  const body = doc.createElement("div");
-  body.className = "rm-card-body";
-  if (!input.comment) body.classList.add("rm-card-preview");
+  const content = doc.createElement("div");
+  content.className = "rm-card-content";
+
+  // 高亮的原文: always shown, muted quote style.
+  const quoteEl = doc.createElement("div");
+  quoteEl.className = "rm-card-quote";
+  quoteEl.textContent = input.quote;
+  content.appendChild(quoteEl);
 
   if (input.editing) {
+    // 用户批注内容: textarea (edit mode).
     const ta = doc.createElement("textarea");
     ta.className = "rm-card-edit";
     ta.value = input.draftValue ?? input.comment ?? "";
-    body.appendChild(ta);
-    card.appendChild(body);
+    ta.placeholder = "写批注…";
+    content.appendChild(ta);
     const ops = doc.createElement("div");
     ops.className = "rm-card-ops rm-card-ops-edit";
-    // Use a done flag + mousedown(preventDefault) so save/cancel don't also trigger blur->commit.
+    // done flag + mousedown(preventDefault) so save/cancel don't also trigger blur->commit.
     let done = false;
     const commitOnce = () => { if (done) return; done = true; cb.onCommitComment(input.id, ta.value); };
     const cancelOnce = () => { if (done) return; done = true; cb.onCancelEdit(input.id); };
     const save = doc.createElement("button");
-    save.className = "rm-card-save"; save.textContent = "✓"; save.title = "Save (Cmd+Enter)";
+    save.className = "rm-card-save"; save.textContent = "✓"; save.title = "保存 (Cmd+Enter)";
     save.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); commitOnce(); });
     const cancel = doc.createElement("button");
-    cancel.className = "rm-card-cancel"; cancel.textContent = "✕"; cancel.title = "Cancel (Esc)";
+    cancel.className = "rm-card-cancel"; cancel.textContent = "✕"; cancel.title = "取消 (Esc)";
     cancel.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); cancelOnce(); });
     ops.append(save, cancel);
-    card.appendChild(ops);
-    // Focus + keyboard shortcuts
+    content.appendChild(ops);
+    card.appendChild(content);
     queueMicrotask(() => ta.focus());
     ta.addEventListener("keydown", (ev) => {
       if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") { ev.preventDefault(); commitOnce(); }
@@ -112,9 +122,14 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     });
     ta.addEventListener("blur", () => commitOnce());
   } else {
-    body.textContent = input.comment ?? input.quotePreview;
-    card.appendChild(body);
-    // Operation row (hover/focus-within)
+    // 用户批注内容: shown when present.
+    if (input.comment) {
+      const commentEl = doc.createElement("div");
+      commentEl.className = "rm-card-comment";
+      commentEl.textContent = input.comment;
+      content.appendChild(commentEl);
+    }
+    // Operation row (hover/focus-within): color swatches + delete.
     const ops = doc.createElement("div");
     ops.className = "rm-card-ops";
     for (const c of input.colors) {
@@ -122,23 +137,18 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
       sw.className = "rm-color-swatch";
       sw.style.background = c.value;
       sw.title = c.label;
-      sw.setAttribute("aria-label", `Color ${c.label}`);
+      sw.setAttribute("aria-label", `颜色 ${c.label}`);
       sw.addEventListener("click", (e) => { e.stopPropagation(); cb.onChangeColor(input.id, c.id); });
       ops.appendChild(sw);
     }
-    const toggle = doc.createElement("button");
-    toggle.className = "rm-card-toggle";
-    toggle.textContent = input.markStyle === "highlight" ? "U̲" : "H";
-    toggle.title = input.markStyle === "highlight" ? "Convert to underline" : "Convert to highlight";
-    toggle.addEventListener("click", (e) => { e.stopPropagation(); cb.onToggleType(input.id); });
-    ops.appendChild(toggle);
     const del = doc.createElement("button");
-    del.className = "rm-card-delete"; del.textContent = "🗑"; del.title = "Delete";
+    del.className = "rm-card-delete"; del.textContent = "🗑"; del.title = "删除";
     del.addEventListener("click", (e) => { e.stopPropagation(); cb.onDelete(input.id); });
     ops.appendChild(del);
-    card.appendChild(ops);
-    // Click body to enter edit mode
-    body.addEventListener("click", () => cb.onEdit(input.id));
+    content.appendChild(ops);
+    card.appendChild(content);
+    // Click quote/comment to enter edit mode.
+    content.addEventListener("click", () => cb.onEdit(input.id));
   }
   parent.appendChild(card);
   return card;

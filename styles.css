@@ -56,8 +56,18 @@
   font-family: "Hanken Grotesk", var(--font-text), var(--default-font), sans-serif;
 }
 .rm-card-strip { width: 3px; flex: 0 0 3px; border-radius: 2px; }
-.rm-card-body { font-size: 13px; line-height: 18px; color: var(--rm-on-surface); flex: 1; min-width: 0; word-break: break-word; }
-.rm-card-preview { font-style: italic; color: var(--rm-on-surface-variant); }
+.rm-card-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; cursor: text; }
+/* 高亮的原文: muted quote with a faint left rule */
+.rm-card-quote {
+  font-size: 12px; line-height: 16px; font-style: italic; color: var(--rm-on-surface-variant);
+  border-left: 2px solid var(--rm-outline-variant); padding-left: 6px;
+  word-break: break-word;
+}
+/* 用户批注的内容: body text */
+.rm-card-comment {
+  font-size: 13px; line-height: 18px; color: var(--rm-on-surface);
+  word-break: break-word; white-space: pre-wrap;
+}
 
 /* Card operation row (hover/focus-within) */
 .rm-card-ops { display: none; gap: 4px; margin-top: 4px; align-items: center; }
@@ -66,11 +76,11 @@
 .rm-color-swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--rm-outline-variant); cursor: pointer; padding: 0; }
 .rm-color-swatch:hover { opacity: 0.85; }
 .rm-color-swatch-default { outline: 1px solid var(--rm-primary); outline-offset: 1px; }
-.rm-card-toggle, .rm-card-delete, .rm-card-save, .rm-card-cancel {
+.rm-card-delete, .rm-card-save, .rm-card-cancel {
   background: transparent; border: 1px solid var(--rm-outline-variant); border-radius: 4px;
   cursor: pointer; padding: 0 6px; font-size: 11px; line-height: 16px; color: var(--rm-on-surface);
 }
-.rm-card-toggle:hover, .rm-card-delete:hover, .rm-card-save:hover, .rm-card-cancel:hover { background: var(--rm-surface-2); }
+.rm-card-delete:hover, .rm-card-save:hover, .rm-card-cancel:hover { background: var(--rm-surface-2); }
 .rm-card-edit { width: 100%; min-height: 40px; font-size: 13px; line-height: 18px;
   font-family: inherit; background: var(--rm-surface); color: var(--rm-on-surface);
   border: 1px solid var(--rm-outline); border-radius: 4px; padding: 4px 6px; resize: vertical; }
