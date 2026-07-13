@@ -8,8 +8,9 @@ import { drawEphemeralMark, clearMarks } from "src/render/mark-renderer";
 import { drawEphemeralCard } from "src/render/annotation-card-rail";
 import { drawEphemeralConnector } from "src/render/connector-renderer";
 import { unionCenter } from "src/domain/pdf-text-anchor";
+import { captureAnchor } from "src/domain/anchor-resolver";
 import type { DurableAnnotationStore } from "src/store/durable-annotation-store";
-import type { DocumentSignature } from "src/domain/annotation";
+import type { DocumentSignature, MutationResult } from "src/domain/annotation";
 
 export type SessionState = "discovered" | "probing" | "attached" | "degraded" | "disposing" | "disposed";
 
@@ -137,6 +138,29 @@ export class ViewerSession {
       const cardX = side === "left" ? Math.max(0, offsetX - 30) : offsetX + pageEl.offsetWidth + 30;
       drawEphemeralConnector(container, { x1: markEdgeX, y1: markCy, x2: cardX, y2: markCy, color: ann.colorValueSnapshot, id: ann.id });
     }
+  }
+
+  hasSelection(): boolean { return this.sel.current() !== null; }
+
+  createAnnotation(markStyle: "highlight" | "underline", colorId?: string): MutationResult {
+    if (!this.handles || this.state !== "attached") return { ok: false, reason: "session not attached" };
+    const snap = this.sel.current();
+    if (!snap) return { ok: false, reason: "no valid selection" };
+    if (!this.signature) return { ok: false, reason: "source signature unavailable" };
+    const pageEl = findPageEl(this.handles, snap.pageNumber);
+    if (!pageEl) return { ok: false, reason: "page not found" };
+    const scale = readCurrentScale(this.handles);
+    const dims = { pageWidth: pageEl.offsetWidth / scale, pageHeight: pageEl.offsetHeight / scale, rotation: 0 as const };
+    const anchor = captureAnchor(snap, pageEl, scale, dims);
+    if (!anchor) return { ok: false, reason: "anchor capture failed" };
+    const colors = this.store.data.settings.colors;
+    const id = colorId ?? this.store.data.settings.defaultColorId;
+    const color = colors.find((c) => c.id === id) ?? colors[0];
+    const result = this.store.create(this.pdfPath, {
+      markStyle, colorId: color.id, colorLabel: color.name, colorValue: color.value, anchor,
+    }, this.signature);
+    if (result.ok) snap.win.getSelection()?.removeAllRanges();
+    return result;
   }
 
   dispose(): void {

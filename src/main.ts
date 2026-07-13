@@ -21,7 +21,39 @@ export default class ReaderMarginsPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on("layout-change", () => this.reconcileLeaves()));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.reconcileLeaves()));
     this.app.workspace.iterateAllLeaves((leaf) => this.attachLeaf(leaf));
+    this.registerCommands();
     this.register(() => { this.destroyAll(); this.store.flushBestEffort(); });
+  }
+
+  private registerCommands() {
+    this.addCommand({
+      id: "highlight-selection",
+      name: "Highlight selected text (default color)",
+      checkCallback: (checking) => {
+        const session = this.activePdfSession();
+        if (!session || !session.hasSelection()) return false;
+        if (checking) return true;
+        const result = session.createAnnotation("highlight");
+        if (!result.ok) new Notice(`Cannot highlight: ${result.reason}`);
+      },
+    });
+    this.addCommand({
+      id: "underline-and-comment",
+      name: "Underline and comment selected text",
+      checkCallback: (checking) => {
+        const session = this.activePdfSession();
+        if (!session || !session.hasSelection()) return false;
+        if (checking) return true;
+        const result = session.createAnnotation("underline");
+        if (!result.ok) new Notice(`Cannot underline: ${result.reason}`);
+      },
+    });
+  }
+
+  private activePdfSession(): ViewerSession | null {
+    const leaf = this.app.workspace.activeLeaf;
+    if (!leaf) return null;
+    return this.sessions.get(leaf) ?? null;
   }
 
   private reconcileLeaves() {
