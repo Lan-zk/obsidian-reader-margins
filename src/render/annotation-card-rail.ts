@@ -75,11 +75,15 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
   card.style.top = `${input.anchorY}px`;
   card.style.borderColor = input.color; // 边框 = 标注色
 
+  // Scrollable text area (quote + comment/textarea); ops stay fixed at the bottom.
+  const textArea = doc.createElement("div");
+  textArea.className = "rm-card-text";
+
   // 高亮的原文: always shown, faint left line, muted.
   const quoteEl = doc.createElement("div");
   quoteEl.className = "rm-card-quote";
   quoteEl.textContent = input.quote;
-  card.appendChild(quoteEl);
+  textArea.appendChild(quoteEl);
 
   if (input.editing) {
     // 用户批注内容: textarea (edit mode).
@@ -87,7 +91,8 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     ta.className = "rm-card-edit";
     ta.value = input.draftValue ?? input.comment ?? "";
     ta.placeholder = "写批注…";
-    card.appendChild(ta);
+    textArea.appendChild(ta);
+    card.appendChild(textArea);
     const actions = doc.createElement("div");
     actions.className = "rm-card-ops rm-card-ops-edit";
     // done flag + mousedown(preventDefault) so save/cancel don't also trigger blur->commit.
@@ -114,9 +119,10 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
       const commentEl = doc.createElement("div");
       commentEl.className = "rm-card-comment";
       commentEl.textContent = input.comment;
-      card.appendChild(commentEl);
+      textArea.appendChild(commentEl);
     }
-    // Operation row: circular color swatches (left) + delete (right), space-between.
+    card.appendChild(textArea);
+    // Operation row: circular color swatches (left) + delete (right), fixed at bottom.
     const ops = doc.createElement("div");
     ops.className = "rm-card-ops";
     const colorsGroup = doc.createElement("div");
@@ -136,10 +142,7 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     ops.append(colorsGroup, del);
     card.appendChild(ops);
     // Click quote or comment to enter edit mode.
-    const editHandler = () => cb.onEdit(input.id);
-    quoteEl.addEventListener("click", editHandler);
-    const commentEl = card.querySelector(".rm-card-comment");
-    if (commentEl) commentEl.addEventListener("click", editHandler);
+    textArea.addEventListener("click", () => cb.onEdit(input.id));
   }
   parent.appendChild(card);
   return card;

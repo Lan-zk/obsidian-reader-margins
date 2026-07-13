@@ -185,7 +185,7 @@ export class ViewerSession {
       }
       const isEditing = this.editingId === ann.id;
       const quoteText = ann.anchor.quote.exact;
-      const quote = quoteText.length > 120 ? quoteText.slice(0, 120) + "…" : quoteText;
+      const quote = quoteText.length > 60 ? quoteText.slice(0, 60) + "…" : quoteText;
       buildCard(rail, {
         id: ann.id,
         quote,

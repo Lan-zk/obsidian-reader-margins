@@ -36,7 +36,7 @@
 .rm-mark { position: absolute; pointer-events: none; }
 
 /* --- Card rails ----------------------------------------------------------- */
-.rm-card-rail { position: absolute; top: 0; bottom: 0; width: clamp(120px, 204px, 220px); pointer-events: auto; }
+.rm-card-rail { position: absolute; top: 0; bottom: 0; width: clamp(200px, 300px, 340px); pointer-events: auto; }
 .rm-card-rail-left { left: 0; }
 .rm-card-rail-right { right: 0; }
 
@@ -45,21 +45,22 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px;
+  gap: 8px;                      /* 4px grid: 8px between text area and ops */
+  padding: 8px;                  /* design.md: cards 8px padding */
   margin-bottom: 8px;
   background: #ffffff;
   border: 1px solid var(--rm-outline-variant); /* overridden inline per-card = annotation color */
-  border-radius: 8px;
+  border-radius: 8px;            /* design.md: cards 8px radius */
   max-height: 240px;
-  overflow-y: auto;
   color: #1c1b1b;
   font-family: "Hanken Grotesk", var(--font-text), var(--default-font), sans-serif;
 }
+/* Scrollable text area; ops stay fixed at the bottom (not scrolling). */
+.rm-card-text { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 /* 高亮的原文: faint left rule, muted (only the quote has this line) */
 .rm-card-quote {
   font-size: 12px; line-height: 16px; font-style: italic; color: #5c5c5c;
-  border-left: 2px solid rgba(0,0,0,0.12); padding-left: 6px;
+  border-left: 2px solid rgba(0,0,0,0.12); padding-left: 8px;
   word-break: break-word; cursor: text;
 }
 /* 用户批注的内容: body text (no left line) */
@@ -67,10 +68,10 @@
   font-size: 13px; line-height: 18px; color: #1c1b1b;
   word-break: break-word; white-space: pre-wrap; cursor: text;
 }
-/* Operation row: color swatches (left) + delete (right), space-between */
-.rm-card-ops { display: none; justify-content: space-between; align-items: center; }
+/* Operation row: fixed at card bottom; color swatches (left) + delete (right) */
+.rm-card-ops { display: none; justify-content: space-between; align-items: center; flex: 0 0 auto; }
 .rm-card:hover .rm-card-ops, .rm-card:focus-within .rm-card-ops { display: flex; }
-.rm-card-ops-edit { display: flex; justify-content: flex-end; gap: 4px; }
+.rm-card-ops-edit { display: flex; justify-content: flex-end; gap: 4px; flex: 0 0 auto; }
 .rm-card-colors { display: inline-flex; gap: 4px; align-items: center; }
 .rm-color-swatch { width: 14px; height: 14px; border-radius: 9999px; border: 1px solid rgba(0,0,0,0.15); cursor: pointer; padding: 0; }
 .rm-color-swatch:hover { opacity: 0.85; }
