@@ -3,6 +3,7 @@ import { parsePluginData, makeDefaultData, snapshotData, type PluginDataV1, type
 import { AnnotationIndexes } from "src/store/indexes";
 import { PersistenceCoordinator, type PersistenceStatus } from "src/store/persistence-coordinator";
 import type { AnnotationRecordV1, CreateAnnotationInput, MutationResult, DocumentSignature } from "src/domain/annotation";
+import { normalizeColors, canDeleteColor, validateSettingsMutation } from "src/domain/colors";
 
 export type ChangeEvent = (pdfPath: string, changedIds: string[]) => void;
 
@@ -95,6 +96,53 @@ export class DurableAnnotationStore {
     if (Object.keys(doc.annotations).length === 0) delete this.data.documents[path]; // prune empty (spec §5.1)
     this.commit(path, [id]);
     return { ok: true, annotation: structuredClone(ann), revision: this.data.stateRevision };
+  }
+
+  // --- Settings mutations (spec §13.3) ---
+  // Renaming/changing a color value does NOT write back to existing annotation
+  // snapshots; only future creates and the toolbar reflect the new settings.
+  addColor(): void {
+    if (this.isReadonly) return;
+    const colors = this.data.settings.colors;
+    const ids = new Set(colors.map((c) => c.id));
+    let n = colors.length + 1;
+    let id = `color-${n}`;
+    while (ids.has(id)) { n++; id = `color-${n}`; }
+    colors.push({ id, name: `Color ${n}`, value: "#cccccc" });
+    this.commitSettings();
+  }
+
+  deleteColor(id: string): void {
+    if (this.isReadonly) return;
+    const settings = this.data.settings;
+    if (!canDeleteColor(settings.colors, id, settings.defaultColorId)) return;
+    settings.colors = settings.colors.filter((c) => c.id !== id);
+    this.commitSettings();
+  }
+
+  setDefaultColor(id: string): void {
+    if (this.isReadonly) return;
+    if (!this.data.settings.colors.some((c) => c.id === id)) return;
+    this.data.settings.defaultColorId = id;
+    this.commitSettings();
+  }
+
+  // Persist the current settings. Returns the validation result so the UI can
+  // surface problems (duplicate names, empty names). Invalid hex/ids are
+  // defensively normalized before saving (spec §10.8).
+  commitSettings(): { ok: true } | { ok: false; reason: string } {
+    if (this.isReadonly) return { ok: false, reason: "store is read-only" };
+    const settings = this.data.settings;
+    settings.colors = normalizeColors(settings.colors);
+    if (settings.colors.length > 0 && !settings.colors.some((c) => c.id === settings.defaultColorId)) {
+      settings.defaultColorId = settings.colors[0].id;
+    }
+    const result = validateSettingsMutation(settings.colors, settings.defaultColorId);
+    this.data.stateRevision++;
+    this.indexes.rebuild(this.data);
+    for (const cb of this.changeListeners) cb("settings", []);
+    this.coord.enqueue(snapshotData(this.data), this.data.stateRevision);
+    return result;
   }
 
   private signatureMatches(path: string, sig: DocumentSignature): boolean {

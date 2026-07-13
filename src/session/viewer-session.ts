@@ -99,6 +99,11 @@ export class ViewerSession {
 
     // Subscribe to store changes: re-reconcile affected pages (spec §6.2).
     const unsub = this.store.onChange((path, ids) => {
+      if (path === "settings") {
+        const colors = this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name }));
+        this.toolbar?.updateColors(colors, this.store.data.settings.defaultColorId);
+        return;
+      }
       if (path !== this.pdfPath) return;
       const pages = new Set<number>();
       for (const id of ids) {

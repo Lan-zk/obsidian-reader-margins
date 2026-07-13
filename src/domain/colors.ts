@@ -42,3 +42,27 @@ export function normalizeColors(input: unknown[]): ColorConfigV1[] {
   }
   return out;
 }
+
+// Pure settings rules (spec §13.3). Live in domain so the store can reuse them
+// without depending on the settings UI layer.
+export function canDeleteColor(rows: { id: string }[], targetId: string, defaultColorId: string): boolean {
+  if (rows.length <= 1) return false;       // never delete the last color
+  if (targetId === defaultColorId) return false; // never delete the default
+  return true;
+}
+
+export function validateSettingsMutation(
+  rows: { id: string; name: string; value: string }[],
+  defaultColorId: string,
+): { ok: true } | { ok: false; reason: string } {
+  if (rows.length === 0) return { ok: false, reason: "At least one color is required." };
+  const names = new Set<string>();
+  for (const r of rows) {
+    if (!r.name.trim()) return { ok: false, reason: "Color name cannot be empty." };
+    if (names.has(r.name)) return { ok: false, reason: `Duplicate color name: ${r.name}` };
+    names.add(r.name);
+    if (!validateHexColor(r.value)) return { ok: false, reason: `Invalid color value: ${r.value}` };
+  }
+  if (!rows.some((r) => r.id === defaultColorId)) return { ok: false, reason: "Default color must exist." };
+  return { ok: true };
+}

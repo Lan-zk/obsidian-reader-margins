@@ -1,6 +1,7 @@
 import { Plugin, WorkspaceLeaf, Notice } from "obsidian";
 import { DurableAnnotationStore } from "src/store/durable-annotation-store";
 import { ViewerSession } from "src/session/viewer-session";
+import { ReaderMarginsSettingsTab } from "src/settings/settings-tab";
 
 export default class ReaderMarginsPlugin extends Plugin {
   store!: DurableAnnotationStore;
@@ -21,6 +22,7 @@ export default class ReaderMarginsPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on("layout-change", () => this.reconcileLeaves()));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.reconcileLeaves()));
     this.app.workspace.iterateAllLeaves((leaf) => this.attachLeaf(leaf));
+    this.addSettingTab(new ReaderMarginsSettingsTab(this.app, this));
     this.registerCommands();
     this.register(() => { this.destroyAll(); this.store.flushBestEffort(); });
   }
