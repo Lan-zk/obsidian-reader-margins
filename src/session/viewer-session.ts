@@ -16,6 +16,7 @@ import { unionCenter } from "src/domain/pdf-text-anchor";
 import { captureAnchor } from "src/domain/anchor-resolver";
 import { ExportModal } from "src/export/export-modal";
 import { MarkdownExportService } from "src/export/markdown-export-service";
+import { hitTestAnnotation } from "src/render/page-projection";
 import type { DurableAnnotationStore } from "src/store/durable-annotation-store";
 import type { AnnotationRecordV1, DocumentSignature, MutationResult } from "src/domain/annotation";
 
@@ -96,6 +97,11 @@ export class ViewerSession {
     };
     h.viewerEl.addEventListener("pointerup", onPointerUp);
     this.scope.addDispose(() => h.viewerEl.removeEventListener("pointerup", onPointerUp));
+
+    // Click hit-test: clicking a mark flashes its linked card (spec §12.2).
+    const onClick = (e: MouseEvent) => this.onPageClick(e);
+    h.viewerEl.addEventListener("click", onClick);
+    this.scope.addDispose(() => h.viewerEl.removeEventListener("click", onClick));
 
     // Subscribe to store changes: re-reconcile affected pages (spec §6.2).
     const unsub = this.store.onChange((path, ids) => {
@@ -270,6 +276,39 @@ export class ViewerSession {
     if (!doc || annotations.length === 0) { new Notice("当前 PDF 没有批注"); return; }
     const service = new MarkdownExportService(app);
     new ExportModal(app, this.pdfPath, annotations, { documentId: doc.documentId, documentRevision: doc.revision }, service).open();
+  }
+
+  // Click on a rendered mark -> hit-test in page-css coords -> flash the card (spec §12.2).
+  private onPageClick(e: MouseEvent): void {
+    if (!this.handles) return;
+    const win = this.handles.viewerEl.ownerDocument.defaultView;
+    const sel = win?.getSelection();
+    if (sel && !sel.isCollapsed) return; // do not interfere with text selection
+    const target = e.target as HTMLElement | null;
+    const pageEl = target?.closest?.(".page[data-page-number]") as HTMLElement | null;
+    if (!pageEl) return;
+    const pageNumber = parseInt(pageEl.dataset.pageNumber ?? "", 10);
+    if (!Number.isFinite(pageNumber)) return;
+    const anns = this.store.byPage(this.pdfPath, pageNumber);
+    if (anns.length === 0) return;
+    const scale = readCurrentScale(this.handles);
+    const pageRect = pageEl.getBoundingClientRect();
+    const px = (e.clientX - pageRect.left) / scale;
+    const py = (e.clientY - pageRect.top) / scale;
+    const id = hitTestAnnotation(
+      anns.map((a) => ({ id: a.id, rects: a.anchor.geometry.rects })),
+      px, py,
+    );
+    if (id) this.flashCard(id);
+  }
+
+  private flashCard(id: string): void {
+    if (!this.handles) return;
+    const card = this.handles.viewerContainerEl.querySelector<HTMLElement>(`.rm-card[data-annotation-id="${id}"]`);
+    if (!card) return;
+    card.classList.add("rm-card-linked");
+    const win = this.handles.viewerEl.ownerDocument.defaultView;
+    win?.setTimeout(() => card.classList.remove("rm-card-linked"), 1500);
   }
 
   private resolveSignature(): DocumentSignature | null {

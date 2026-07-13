@@ -56,6 +56,12 @@
   color: #1c1b1b;
   font-family: "Hanken Grotesk", var(--font-text), var(--default-font), sans-serif;
 }
+/* Click mark -> card flash (spec §12.2) */
+.rm-card-linked { animation: rm-flash 1.5s ease-out; }
+@keyframes rm-flash {
+  0%, 25% { box-shadow: 0 0 0 3px var(--interactive-accent, #5c8db8); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
 /* Scrollable text area; ops stay fixed at the bottom (not scrolling). */
 .rm-card-text { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 /* 高亮的原文: faint left rule, muted (only the quote has this line) */
