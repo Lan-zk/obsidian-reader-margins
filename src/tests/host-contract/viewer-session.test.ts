@@ -176,4 +176,12 @@ describe("ViewerSession (M-1)", () => {
     expect(store.byId("test.pdf", created.annotation.id)?.cardPosition?.x).toBe(42);
     session.dispose();
   });
+  it("enters degraded when eventBus is missing (fail closed, H-07)", async () => {
+    const { view } = buildHostFixture({ numPages: 1, marginWidthPx: 200 });
+    delete (view as any).viewer.child.pdfViewer.eventBus;
+    const session = new ViewerSession(view as any, "test.pdf", makeStore());
+    await session.attach();
+    expect(session.state).toBe("degraded");
+    session.dispose();
+  });
 });

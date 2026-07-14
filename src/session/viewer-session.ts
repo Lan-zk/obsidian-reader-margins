@@ -82,11 +82,18 @@ export class ViewerSession {
 
   private finishAttach(h: HostHandles, gen: number): void {
     this.handles = h;
-    this.caps = probeCapabilities(h, { sourceSignature: "verified" });
-    // Resolve sourceSignature (spec §10.2) - best-effort; verified in M-1 smoke gate.
+    // Probe the real signature state (no hardcoded "verified") and capabilities.
     const fp = readPdfFingerprint(h);
     const pc = readPageCount(h);
     this.signature = fp && pc ? { pdfFingerprint: fp, numPages: pc } : null;
+    const sigState = this.probeSignatureState(fp, pc);
+    this.caps = probeCapabilities(h, { sourceSignature: sigState });
+    // Core capabilities (viewer core + event bus) are mandatory. Fail closed to
+    // degraded instead of attaching UI that cannot reconcile (spec §7.4, H-07).
+    if (this.caps.viewerCore !== "ready" || this.caps.eventBus !== "ready") {
+      this.state = "degraded";
+      return;
+    }
 
     // spec §7.5: register listeners BEFORE scanning existing pages.
     const bus = h.eventBus as any;
@@ -459,6 +466,14 @@ export class ViewerSession {
     // If the fingerprint is inaccessible, fall back to "unknown" - numPages still
     // guards against same-path replacement with a different-length PDF (spec §10.2).
     return { pdfFingerprint: fp ?? "unknown", numPages: pc };
+  }
+
+  // Classify the live signature vs the stored document for the capability report.
+  private probeSignatureState(fp: string | undefined, pc: number | undefined): "verified" | "mismatch" | "unknown" {
+    if (!fp || !pc) return "unknown";
+    const doc = this.store.data.documents[this.pdfPath];
+    if (!doc) return "verified"; // new document, nothing to mismatch against
+    return signatureMismatch(doc.sourceSignature, { pdfFingerprint: fp, numPages: pc }) ? "mismatch" : "verified";
   }
 
   private makeT(): Translate {
