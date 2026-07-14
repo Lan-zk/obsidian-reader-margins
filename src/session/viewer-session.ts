@@ -250,6 +250,7 @@ export class ViewerSession {
       const card = buildCard(rail, {
         id: ann.id, quote, comment: ann.comment, color: ann.colorValueSnapshot,
         colors: this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name })),
+        markStyle: ann.markStyle,
         side, anchorY: markCenterY, editing: isEditing,
         draftValue: isEditing ? this.draft.peek(ann.id)?.value : undefined,
         cardLeft: horizontal.x,
@@ -325,6 +326,14 @@ export class ViewerSession {
       // Clear the cached snapshot so a repeat trigger (double-click, double hotkey)
       // cannot create a duplicate annotation from the same selection.
       this.sel.clear();
+      // Underline is a "mark + immediately comment" action (spec §4.3): enter
+      // edit mode so the user can type without a second click (H-09).
+      if (markStyle === "underline" && result.ok) {
+        const created = result.annotation;
+        this.editingId = created.id;
+        this.draft.begin(created.id, created.revision, "");
+        this.reconcilePage(snap.pageNumber);
+      }
     }
     return result;
   }
@@ -655,6 +664,9 @@ export class ViewerSession {
         if (!ann) return;
         const page = ann.anchor.pageNumber;
         const tombstone = structuredClone(ann);
+        // Capture the documentId before delete - the document may be pruned if
+        // this was the last annotation, and restore must keep the same identity.
+        const documentId = this.store.data.documents[this.pdfPath]?.documentId;
         const result = this.store.delete(this.pdfPath, id);
         if (result.ok) {
           this.removeAnnotationDom(id);
@@ -662,16 +674,16 @@ export class ViewerSession {
           showUndoNotice(this.t!("notice.deleted"), this.t!("notice.undo"), () => {
             const sig = this.resolveSignature();
             if (!sig) { new Notice(this.t!("notice.cannotRestore")); return; }
-            this.store.create(this.pdfPath, {
-              markStyle: tombstone.markStyle,
-              colorId: tombstone.colorIdSnapshot ?? this.store.data.settings.defaultColorId,
-              colorLabel: tombstone.colorLabelSnapshot,
-              colorValue: tombstone.colorValueSnapshot,
-              comment: tombstone.comment,
-              anchor: tombstone.anchor,
-            }, sig);
+            // restore() preserves id + documentId; create() would change both (H-10).
+            this.store.restore(this.pdfPath, tombstone, documentId, sig);
           });
         }
+      },
+      onToggleType: (id) => {
+        const ann = this.store.byId(this.pdfPath, id);
+        if (!ann) return;
+        const next = ann.markStyle === "highlight" ? "underline" : "highlight";
+        this.store.update(this.pdfPath, id, { markStyle: next }, ann.revision);
       },
     };
   }

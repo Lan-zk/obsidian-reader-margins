@@ -108,6 +108,27 @@ export class DurableAnnotationStore {
     return { ok: true, annotation: structuredClone(ann), revision: this.data.stateRevision };
   }
 
+  // Restore a deleted annotation with its original id (and the document's
+  // original documentId when the document was pruned). Used by Undo so the
+  // identity is preserved - a create() would mint a new id/revision/timestamp
+  // and break Markdown snapshot ownership (H-10).
+  restore(path: string, tombstone: AnnotationRecordV1, documentId: string | undefined, signature: DocumentSignature): MutationResult {
+    if (this.isReadonly) return { ok: false, reason: "store is read-only" };
+    if (!this.signatureMatches(path, signature)) return { ok: false, reason: "source signature mismatch; refusing to bind annotations" };
+    let doc = this.data.documents[path];
+    if (!doc) {
+      doc = { documentId: documentId ?? crypto.randomUUID(), sourceSignature: signature, revision: 0, annotations: {} };
+      this.data.documents[path] = doc;
+    }
+    if (doc.annotations[tombstone.id]) return { ok: false, reason: "annotation id already exists" };
+    const restored: AnnotationRecordV1 = { ...structuredClone(tombstone), revision: tombstone.revision + 1, updatedAt: new Date().toISOString() };
+    doc.annotations[tombstone.id] = restored;
+    doc.revision++;
+    this.data.stateRevision++;
+    this.commit(path, [tombstone.id]);
+    return { ok: true, annotation: structuredClone(restored), revision: this.data.stateRevision };
+  }
+
   // --- Settings mutations (spec §13.3) ---
   // Renaming/changing a color value does NOT write back to existing annotation
   // snapshots; only future creates and the toolbar reflect the new settings.

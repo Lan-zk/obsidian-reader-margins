@@ -53,14 +53,16 @@ export interface CardCallbacks {
   onCommitComment: (id: string, value: string) => void;
   onCancelEdit: (id: string) => void;
   onChangeColor: (id: string, colorId: string) => void;
+  onToggleType: (id: string) => void;
   onDelete: (id: string) => void;
 }
 export interface BuildCardInput {
   id: string;
-  quote: string;          // 高亮的原文 (always shown)
-  comment?: string;       // 用户批注的内容 (shown when present)
+  quote: string;
+  comment?: string;
   color: string;
   colors: { id: string; value: string; label: string }[];
+  markStyle: "highlight" | "underline";
   side: "left" | "right";
   anchorY: number;
   editing?: boolean;
@@ -167,10 +169,16 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
       sw.addEventListener("click", (e) => { e.stopPropagation(); cb.onChangeColor(input.id, c.id); });
       colorsGroup.appendChild(sw);
     }
+    const toggle = doc.createElement("button");
+    toggle.className = "rm-card-toggle";
+    toggle.textContent = input.markStyle === "highlight" ? "U̲" : "H";
+    toggle.title = t("card.toggleType");
+    toggle.setAttribute("aria-label", t("card.toggleType"));
+    toggle.addEventListener("click", (e) => { e.stopPropagation(); cb.onToggleType(input.id); });
     const del = doc.createElement("button");
     del.className = "rm-card-delete"; del.title = t("card.delete"); del.appendChild(createIcon(doc, "trash", 14));
     del.addEventListener("click", (e) => { e.stopPropagation(); cb.onDelete(input.id); });
-    ops.append(colorsGroup, del);
+    ops.append(colorsGroup, toggle, del);
     card.appendChild(ops);
     // Click quote or comment to enter edit mode.
     textArea.addEventListener("click", () => cb.onEdit(input.id));

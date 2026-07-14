@@ -107,4 +107,18 @@ describe("DurableAnnotationStore", () => {
     s.setLanguage("fr" as any);
     expect(s.data.settings.language).toBe("zh"); // unchanged
   });
+  it("restore keeps the original id and documentId (H-10)", () => {
+    const s = new DurableAnnotationStore(async () => {});
+    s.loadAndValidate(null);
+    const res = s.create("a.pdf", input(), SIG) as any;
+    const annId = res.annotation.id;
+    const docId = s.data.documents["a.pdf"].documentId;
+    const tombstone = structuredClone(s.byId("a.pdf", annId));
+    s.delete("a.pdf", annId);
+    expect(s.data.documents["a.pdf"]).toBeUndefined(); // pruned
+    const r = s.restore("a.pdf", tombstone, docId, SIG) as any;
+    expect(r.ok).toBe(true);
+    expect(r.annotation.id).toBe(annId); // same id, not a new UUID
+    expect(s.data.documents["a.pdf"].documentId).toBe(docId); // document identity preserved
+  });
 });
