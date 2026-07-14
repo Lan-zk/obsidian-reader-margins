@@ -27,8 +27,13 @@ export default class ReaderMarginsPlugin extends Plugin {
     if (state === "future" || state === "invalid") {
       new Notice(`Reader Margins: ${state} data.json; annotations disabled to prevent overwrite.`, 10000);
     }
-    this.viewManager = new PdfViewManager(this.store, () =>
-      this.diagnostics.set("sessionCount", this.viewManager.sessionCount));
+    this.viewManager = new PdfViewManager(this.store, () => {
+      this.diagnostics.set("sessionCount", this.viewManager.sessionCount);
+      let unresolved = 0; let disposers = 0;
+      for (const s of this.viewManager.allSessions()) { unresolved += s.unresolvedCount; disposers += s.disposerCount; }
+      this.diagnostics.set("totalUnresolved", unresolved);
+      this.diagnostics.set("totalDisposerCount", disposers);
+    });
     this.viewManager.start(this);
     this.addSettingTab(new ReaderMarginsSettingsTab(this.app, this));
     this.registerCommands();

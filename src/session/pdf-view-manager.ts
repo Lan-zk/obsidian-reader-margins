@@ -27,6 +27,7 @@ export class PdfViewManager {
   sessionFor(leaf: WorkspaceLeaf): ViewerSession | undefined {
     return this.sessions.get(leaf);
   }
+  allSessions(): ViewerSession[] { return Array.from(this.sessions.values()); }
 
   // Active PDF session for command routing (the leaf the user is focused on).
   activeSession(): ViewerSession | null {

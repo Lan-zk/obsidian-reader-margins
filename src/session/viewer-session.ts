@@ -47,6 +47,7 @@ export class ViewerSession {
   private opts: Required<ViewerSessionOptions>;
   private signature: DocumentSignature | null = null;
   private sigWarned = false;
+  unresolvedCount = 0; // diagnostics: incremented when resolveAnchor returns unresolved
   private t: Translate | null = null;
   private pendingReconcile = new Set<number>();
   private rafId: number | null = null;
@@ -596,7 +597,7 @@ export class ViewerSession {
       pageDims: dims,
     };
     const result = resolveAnchor(ann.anchor, ctx);
-    if (result.status === "unresolved") return null;
+    if (result.status === "unresolved") { this.unresolvedCount++; return null; }
     return result.rects;
   }
 
