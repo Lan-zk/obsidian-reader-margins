@@ -49,6 +49,7 @@ export interface CardCallbacks {
   onDragStart: (id: string, e: PointerEvent, card: HTMLElement) => void;
   onResetPosition: (id: string) => void;
   onEdit: (id: string) => void;
+  onDraftUpdate: (id: string, value: string) => void;
   onCommitComment: (id: string, value: string) => void;
   onCancelEdit: (id: string) => void;
   onChangeColor: (id: string, colorId: string) => void;
@@ -117,7 +118,10 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     const ta = doc.createElement("textarea");
     ta.className = "rm-card-edit";
     ta.value = input.draftValue ?? input.comment ?? "";
-    ta.placeholder = "写批注…";
+    ta.placeholder = "...";
+    // Sync every input into the DraftController so a re-render (zoom/textlayer
+    // rebuild) or conflict restores the current value instead of the stale one (H-04).
+    ta.addEventListener("input", () => cb.onDraftUpdate(input.id, ta.value));
     textArea.appendChild(ta);
     card.appendChild(textArea);
     const actions = doc.createElement("div");

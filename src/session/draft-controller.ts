@@ -20,6 +20,7 @@ export class DraftController implements Disposable {
   }
   has(id: string): boolean { return this.drafts.has(id); }
   peek(id: string): AnnotationDraft | undefined { return this.drafts.get(id); }
+  all(): AnnotationDraft[] { return Array.from(this.drafts.values()); }
   commit(id: string): { id: string; value: string; baseRevision: number } | null {
     const d = this.drafts.get(id);
     if (!d) return null;

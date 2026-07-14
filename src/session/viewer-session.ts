@@ -616,15 +616,25 @@ export class ViewerSession {
         this.draft.begin(id, ann.revision, ann.comment ?? "");
         reRender(id);
       },
+      onDraftUpdate: (id, value) => {
+        // Keep the draft in sync with the textarea so re-render/conflict restore
+        // the user's current input (H-04).
+        this.draft.update(id, value);
+      },
       onCommitComment: (id, value) => {
         const ann = this.store.byId(this.pdfPath, id);
         const draft = this.draft.peek(id);
         const baseRev = draft?.baseRevision ?? ann?.revision ?? 0;
-        this.editingId = null;
-        this.draft.cancel(id);
-        if (!ann) return;
+        if (!ann) { this.editingId = null; this.draft.cancel(id); return; }
         const result = this.store.update(this.pdfPath, id, { comment: value }, baseRev);
-        if (!result.ok) new Notice(this.t!("notice.conflict"));
+        if (result.ok) {
+          this.editingId = null;
+          this.draft.cancel(id);
+        } else {
+          // Conflict: keep the draft (and edit mode) so the user can retry.
+          this.draft.update(id, value);
+          new Notice(this.t!("notice.conflict"));
+        }
       },
       onCancelEdit: (id) => {
         this.editingId = null;
@@ -680,6 +690,12 @@ export class ViewerSession {
       this.handles.viewerContainerEl.querySelector(".rm-card-rail-right")?.remove();
       this.handles.viewerContainerEl.querySelector(".rm-connector-layer")?.remove();
       this.handles.viewerEl.querySelectorAll(".rm-mark-layer").forEach((n) => n.remove());
+    }
+    // Best-effort commit pending drafts before tearing down so unsaved input is
+    // not silently lost on view close / plugin unload (H-04).
+    for (const d of this.draft.all()) {
+      const ann = this.store.byId(this.pdfPath, d.annotationId);
+      if (ann) this.store.update(this.pdfPath, d.annotationId, { comment: d.value }, d.baseRevision);
     }
     this.sel.dispose();
     this.draft.dispose();
