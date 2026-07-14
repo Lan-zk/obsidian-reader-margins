@@ -113,7 +113,7 @@ describe("DurableAnnotationStore", () => {
     const res = s.create("a.pdf", input(), SIG) as any;
     const annId = res.annotation.id;
     const docId = s.data.documents["a.pdf"].documentId;
-    const tombstone = structuredClone(s.byId("a.pdf", annId));
+    const tombstone = structuredClone(s.byId("a.pdf", annId)!);
     s.delete("a.pdf", annId);
     expect(s.data.documents["a.pdf"]).toBeUndefined(); // pruned
     const r = s.restore("a.pdf", tombstone, docId, SIG) as any;
