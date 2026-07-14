@@ -25,10 +25,39 @@ export class ReaderMarginsSettingsTab extends PluginSettingTab {
     const t = this.t();
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: t("settings.section.colors") });
+    containerEl.createEl("h2", { text: t("settings.section.reset") });
+    new Setting(containerEl).addButton((btn) =>
+      btn.setButtonText(t("settings.reset")).onClick(() => {
+        if (window.confirm(t("settings.reset.confirm"))) {
+          this.plugin.store.resetSettings();
+          this.display();
+        }
+      }),
+    );
+
+    containerEl.createEl("h2", { text: t("settings.section.language") });
+    new Setting(containerEl).addDropdown((dd) => {
+      dd.addOption("auto", t("language.auto"));
+      dd.addOption("en", t("language.en"));
+      dd.addOption("zh", t("language.zh"));
+      dd.setValue(this.plugin.store.data.settings.language).onChange((id: string) => {
+        this.plugin.store.setLanguage(id as Language);
+        this.display();
+      });
+    });
+
+    containerEl.createEl("h2", { text: t("settings.section.default") });
     const colors = this.plugin.store.data.settings.colors;
     const defaultId = this.plugin.store.data.settings.defaultColorId;
+    new Setting(containerEl).addDropdown((dd) => {
+      for (const c of colors) dd.addOption(c.id, c.name);
+      dd.setValue(defaultId).onChange((id: string) => {
+        this.plugin.store.setDefaultColor(id);
+        this.display();
+      });
+    });
 
+    containerEl.createEl("h2", { text: t("settings.section.colors") });
     for (const c of colors) {
       const setting = new Setting(containerEl)
         .setName(t("color.label"))
@@ -64,35 +93,5 @@ export class ReaderMarginsSettingsTab extends PluginSettingTab {
       });
       if (colors.length >= MAX_COLORS) btn.setDisabled(true).setTooltip(t("color.cannotAdd"));
     });
-
-    containerEl.createEl("h2", { text: t("settings.section.default") });
-    new Setting(containerEl).addDropdown((dd) => {
-      for (const c of colors) dd.addOption(c.id, c.name);
-      dd.setValue(defaultId).onChange((id: string) => {
-        this.plugin.store.setDefaultColor(id);
-        this.display();
-      });
-    });
-
-    containerEl.createEl("h2", { text: t("settings.section.language") });
-    new Setting(containerEl).addDropdown((dd) => {
-      dd.addOption("auto", t("language.auto"));
-      dd.addOption("en", t("language.en"));
-      dd.addOption("zh", t("language.zh"));
-      dd.setValue(this.plugin.store.data.settings.language).onChange((id: string) => {
-        this.plugin.store.setLanguage(id as Language);
-        this.display();
-      });
-    });
-
-    containerEl.createEl("h2", { text: t("settings.section.reset") });
-    new Setting(containerEl).addButton((btn) =>
-      btn.setButtonText(t("settings.reset")).onClick(() => {
-        if (window.confirm(t("settings.reset.confirm"))) {
-          this.plugin.store.resetSettings();
-          this.display();
-        }
-      }),
-    );
   }
 }
