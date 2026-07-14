@@ -21,6 +21,7 @@ export interface HostFixtureOptions {
   scale?: number;
   includeToolbar?: boolean;
   marginWidthPx?: number;
+  fingerprint?: string;
 }
 
 export function buildHostFixture(opts: HostFixtureOptions = {}) {
@@ -44,7 +45,8 @@ export function buildHostFixture(opts: HostFixtureOptions = {}) {
   }
   const margin = opts.marginWidthPx ?? 200;
   containerEl.style.width = `${600 + margin * 2}px`;
-  const pdfJsViewer = { currentScale: scale };
+  const pdfJsViewer: any = { currentScale: scale, pagesCount: numPages };
+  if (opts.fingerprint !== undefined) pdfJsViewer.pdfDocument = { fingerprint: opts.fingerprint };
   const obsidianViewer = { pdfViewer: pdfJsViewer, dom: { viewerContainerEl: containerEl, viewerEl }, eventBus };
   const child = { pdfViewer: obsidianViewer };
   const view = { viewer: { child }, file: { path: "test.pdf" }, containerEl };

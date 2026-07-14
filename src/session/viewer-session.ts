@@ -18,6 +18,7 @@ import { ExportModal } from "src/export/export-modal";
 import { MarkdownExportService } from "src/export/markdown-export-service";
 import { hitTestAnnotation } from "src/render/page-projection";
 import type { DurableAnnotationStore } from "src/store/durable-annotation-store";
+import { signatureMismatch } from "src/host/source-signature";
 import type { AnnotationRecordV1, DocumentSignature, MutationResult } from "src/domain/annotation";
 
 export type SessionState = "discovered" | "probing" | "attached" | "degraded" | "disposing" | "disposed";
@@ -42,6 +43,7 @@ export class ViewerSession {
   private probeTimer: ReturnType<typeof setTimeout> | null = null;
   private opts: Required<ViewerSessionOptions>;
   private signature: DocumentSignature | null = null;
+  private sigWarned = false;
   private pendingReconcile = new Set<number>();
   private rafId: number | null = null;
   private editingId: string | null = null;
@@ -165,6 +167,16 @@ export class ViewerSession {
     if (!this.handles || this.state !== "attached") return;
     const pageEl = findPageEl(this.handles, pageNumber);
     if (!pageEl) return;
+    // sourceSignature guard (spec §10.2): if the PDF at this path was replaced
+    // (fingerprint/numPages changed), do not render stale annotations. Checked
+    // lazily because the signature may be unavailable at attach time. Marks are
+    // cleared and already-drawn cards/connectors for this page are removed; data
+    // is never deleted.
+    if (this.isSignatureMismatched()) {
+      clearMarks(pageEl);
+      for (const a of this.store.byPage(this.pdfPath, pageNumber)) this.removeAnnotationDom(a.id);
+      return;
+    }
     const scale = readCurrentScale(this.handles);
     const container = this.handles.viewerContainerEl;
     // Clear only this page's marks (per-page, safe). Cards/connectors are deduped
@@ -347,6 +359,23 @@ export class ViewerSession {
     // If the fingerprint is inaccessible, fall back to "unknown" - numPages still
     // guards against same-path replacement with a different-length PDF (spec §10.2).
     return { pdfFingerprint: fp ?? "unknown", numPages: pc };
+  }
+
+  // True when the live PDF's signature differs from the stored document's. No
+  // stored doc (no annotations yet) or unreadable signature -> not a mismatch.
+  private isSignatureMismatched(): boolean {
+    const doc = this.store.data.documents[this.pdfPath];
+    if (!doc) return false;
+    const sig = this.resolveSignature();
+    if (!sig) return false;
+    const mismatched = signatureMismatch(doc.sourceSignature, sig);
+    if (mismatched && !this.sigWarned) {
+      new Notice("Reader Margins: PDF 已替换，旧批注暂不显示（签名不匹配）。", 8000);
+      this.sigWarned = true;
+    } else if (!mismatched) {
+      this.sigWarned = false; // PDF swapped back; allow re-rendering
+    }
+    return mismatched;
   }
 
   private cardCallbacks(): CardCallbacks {
