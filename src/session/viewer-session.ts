@@ -146,7 +146,7 @@ export class ViewerSession {
     this.scope.addDispose(() => h.viewerEl.removeEventListener("click", onClick));
 
     // Subscribe to store changes: re-reconcile affected pages (spec §6.2).
-    const unsub = this.store.onChange((path, ids) => {
+    const unsub = this.store.onChange((path, changes) => {
       if (path === "settings") {
         // Language or colors may have changed: refresh the translator, toolbar,
         // and all visible cards.
@@ -159,10 +159,12 @@ export class ViewerSession {
       }
       if (path !== this.pdfPath) return;
       const pages = new Set<number>();
-      for (const id of ids) {
-        const a = this.store.byId(path, id);
-        if (a) pages.add(a.anchor.pageNumber);
-        else this.removeAnnotationDom(id); // deleted: remove card + connector
+      for (const ch of changes) {
+        if (ch.deleted) { this.removeAnnotationDom(ch.id); if (ch.page != null) pages.add(ch.page); }
+        else {
+          const a = this.store.byId(path, ch.id);
+          if (a) pages.add(a.anchor.pageNumber);
+        }
       }
       pages.forEach((p) => this.reconcilePage(p));
     });

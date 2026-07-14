@@ -30,7 +30,7 @@ describe("DurableAnnotationStore", () => {
     const s = new DurableAnnotationStore(save);
     s.loadAndValidate(null);
     const changes: { p: string; ids: string[] }[] = [];
-    s.onChange((p, ids) => changes.push({ p, ids }));
+    s.onChange((p, chs) => changes.push({ p, ids: chs.map(c => c.id) }));
     const res = s.create("a.pdf", input(), SIG);
     expect(res.ok).toBe(true);
     expect(changes).toEqual([{ p: "a.pdf", ids: [(res as any).annotation.id] }]);
@@ -63,7 +63,7 @@ describe("DurableAnnotationStore", () => {
     s.loadAndValidate(null);
     const res = s.create("a.pdf", input(), SIG) as any;
     const changes: { p: string; ids: string[] }[] = [];
-    s.onChange((p, ids) => changes.push({ p, ids }));
+    s.onChange((p, chs) => changes.push({ p, ids: chs.map(c => c.id) }));
     s.delete("a.pdf", res.annotation.id);
     expect(changes.at(-1)).toEqual({ p: "a.pdf", ids: [res.annotation.id] });
     expect(s.byPage("a.pdf", 1)).toHaveLength(0);

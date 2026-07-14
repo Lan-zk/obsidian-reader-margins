@@ -6,7 +6,8 @@ import type { AnnotationRecordV1, CreateAnnotationInput, MutationResult, Documen
 import { normalizeColors, canDeleteColor, validateSettingsMutation, MAX_COLORS, DEFAULT_COLORS, DEFAULT_COLOR_ID } from "src/domain/colors";
 import { isLanguage, DEFAULT_LANGUAGE, type Language } from "src/i18n";
 
-export type ChangeEvent = (pdfPath: string, changedIds: string[]) => void;
+export interface ChangeEntry { id: string; page?: number; deleted?: boolean; }
+export type ChangeEvent = (pdfPath: string, changes: ChangeEntry[]) => void;
 
 const LIMITS = { maxAnnotationsPerDoc: 20_000, maxCommentChars: 100_000, maxQuoteChars: 20_000 };
 
@@ -67,7 +68,7 @@ export class DurableAnnotationStore {
     doc.annotations[id] = record;
     doc.revision++;
     this.data.stateRevision++;
-    this.commit(path, [id]);
+    this.commit(path, [{ id, page: record.anchor.pageNumber }]);
     return { ok: true, annotation: structuredClone(record), revision: this.data.stateRevision };
   }
 
@@ -91,7 +92,7 @@ export class DurableAnnotationStore {
     ann.updatedAt = new Date().toISOString();
     doc.revision++;
     this.data.stateRevision++;
-    this.commit(path, [id]);
+    this.commit(path, [{ id, page: ann.anchor.pageNumber }]);
     return { ok: true, annotation: structuredClone(ann), revision: this.data.stateRevision };
   }
 
@@ -100,11 +101,12 @@ export class DurableAnnotationStore {
     const doc = this.data.documents[path];
     const ann = doc?.annotations[id];
     if (!ann) return { ok: false, reason: "annotation not found" };
+    const page = ann.anchor.pageNumber;
     delete doc.annotations[id];
     doc.revision++;
     this.data.stateRevision++;
     if (Object.keys(doc.annotations).length === 0) delete this.data.documents[path]; // prune empty (spec §5.1)
-    this.commit(path, [id]);
+    this.commit(path, [{ id, page, deleted: true }]);
     return { ok: true, annotation: structuredClone(ann), revision: this.data.stateRevision };
   }
 
@@ -125,7 +127,7 @@ export class DurableAnnotationStore {
     doc.annotations[tombstone.id] = restored;
     doc.revision++;
     this.data.stateRevision++;
-    this.commit(path, [tombstone.id]);
+    this.commit(path, [{ id: tombstone.id, page: restored.anchor.pageNumber }]);
     return { ok: true, annotation: structuredClone(restored), revision: this.data.stateRevision };
   }
 
@@ -190,6 +192,10 @@ export class DurableAnnotationStore {
     }
     if (!isLanguage(settings.language)) settings.language = DEFAULT_LANGUAGE;
     const result = validateSettingsMutation(settings.colors, settings.defaultColorId);
+    // H-11: do not persist or bump revision when the settings are invalid. The UI
+    // directly mutated the store object, but the invalid state must stay in memory
+    // so the user can see and correct it; it just won't be saved.
+    if (!result.ok) return result;
     this.data.stateRevision++;
     this.indexes.rebuild(this.data);
     for (const cb of this.changeListeners) cb("settings", []);
@@ -211,9 +217,9 @@ export class DurableAnnotationStore {
     return this.data.documents[path];
   }
 
-  private commit(path: string, ids: string[]) {
+  private commit(path: string, changes: ChangeEntry[]) {
     this.indexes.rebuild(this.data);
-    for (const cb of this.changeListeners) cb(path, ids);
+    for (const cb of this.changeListeners) cb(path, changes);
     this.coord.enqueue(snapshotData(this.data), this.data.stateRevision);
   }
 }
