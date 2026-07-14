@@ -1,6 +1,6 @@
 // src/export/markdown-export-service.ts
 // Writes a Markdown snapshot to the vault with ownership detection (spec §15.3).
-import { App, Notice, TFile, normalizePath } from "obsidian";
+import { App, TFile, normalizePath } from "obsidian";
 import { renderSnapshot } from "src/export/markdown-codec";
 import type { AnnotationRecordV1 } from "src/domain/annotation";
 
@@ -10,6 +10,9 @@ export interface ExportMeta {
   documentId: string;
   documentRevision: number;
 }
+
+export type ExportReason = "empty" | "exists_no_replace" | "exists_not_owner" | "not_found" | "write_failed";
+export type ExportResult = { ok: true; path: string } | { ok: false; reason: ExportReason };
 
 // A snapshot may only be overwritten in place when its frontmatter proves it
 // belongs to the same document (spec §15.3). Unknown files are never overwritten.
@@ -29,32 +32,67 @@ export function defaultExportPath(pdfPath: string, now: Date): string {
   return normalizePath(dir ? `${dir}/${name}` : name);
 }
 
+// Generate a truly unique default path by appending an incrementing suffix when
+// the minute-precision name already collides (spec §15.2: same name -> append
+// an incrementing number).
+export async function defaultUniquePath(app: App, pdfPath: string, now: Date): Promise<string> {
+  const base = defaultExportPath(pdfPath, now);
+  let path = base;
+  let i = 2;
+  while (app.vault.getAbstractFileByPath(path) instanceof TFile) {
+    const dot = base.lastIndexOf(".");
+    const stem = dot > 0 ? base.slice(0, dot) : base;
+    const ext = dot > 0 ? base.slice(dot) : "";
+    path = normalizePath(`${stem} ${i}${ext}`);
+    i++;
+  }
+  return path;
+}
+
 export class MarkdownExportService {
   constructor(private app: App) {}
 
-  async export(annotations: AnnotationRecordV1[], meta: ExportMeta): Promise<void> {
-    if (annotations.length === 0) { new Notice("当前 PDF 没有批注"); return; }
+  // Classify an existing file at `target` for the UI: none / owner (replaceable) /
+  // foreign (exists but not this document's snapshot).
+  async classifyExisting(target: string, documentId: string): Promise<"none" | "owner" | "foreign"> {
+    const f = this.app.vault.getAbstractFileByPath(target);
+    if (!(f instanceof TFile)) return "none";
+    const fm = await this.readFrontmatter(f);
+    return isReplaceableSnapshot(fm, documentId) ? "owner" : "foreign";
+  }
+
+  // Write the snapshot. `replace` must be true to overwrite an existing file;
+  // the caller (Modal) only sets it after an explicit Replace action and a
+  // fresh ownership check. Returns a typed result so the UI can surface failures
+  // without swallowing them (H-06, M-07).
+  async export(
+    annotations: AnnotationRecordV1[],
+    meta: ExportMeta,
+    target: string,
+    replace: boolean,
+  ): Promise<ExportResult> {
+    if (annotations.length === 0) return { ok: false, reason: "empty" };
     const md = renderSnapshot({
       pdfBaseName: meta.pdfBaseName, pdfPath: meta.pdfPath,
       documentId: meta.documentId, documentRevision: meta.documentRevision,
       exportedAt: new Date().toISOString(), annotations,
     });
-    const target = defaultExportPath(meta.pdfPath, new Date());
     const existing = this.app.vault.getAbstractFileByPath(target);
-    if (existing instanceof TFile) {
-      const fm = await this.readFrontmatter(existing);
-      if (!isReplaceableSnapshot(fm, meta.documentId)) {
-        new Notice("目标文件已存在且不属于本 PDF 的导出快照；请手动选择路径。", 8000);
-        return;
+    try {
+      if (existing instanceof TFile) {
+        if (!replace) return { ok: false, reason: "exists_no_replace" };
+        const fm = await this.readFrontmatter(existing);
+        if (!isReplaceableSnapshot(fm, meta.documentId)) return { ok: false, reason: "exists_not_owner" };
+        await this.app.vault.modify(existing, md);
+      } else {
+        if (replace) return { ok: false, reason: "not_found" };
+        await this.app.vault.create(target, md);
       }
-      await this.app.vault.modify(existing, md);
-      new Notice(`已导出 ${annotations.length} 条批注（覆盖）`);
-      await this.app.workspace.openLinkText(target, "", false);
-      return;
+    } catch {
+      return { ok: false, reason: "write_failed" };
     }
-    await this.app.vault.create(target, md);
-    new Notice(`已导出 ${annotations.length} 条批注`);
     await this.app.workspace.openLinkText(target, "", false);
+    return { ok: true, path: target };
   }
 
   private async readFrontmatter(file: TFile): Promise<Record<string, unknown> | null> {
