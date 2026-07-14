@@ -7,8 +7,9 @@ import type { HostHandles } from "./host-typings";
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
+// Cross-window safe Element check (global HTMLElement differs across popout realms).
 function isElement(v: unknown): v is HTMLElement {
-  return v instanceof HTMLElement;
+  return typeof v === "object" && v !== null && (v as any).nodeType === Node.ELEMENT_NODE && typeof (v as any).addEventListener === "function";
 }
 
 // Probe the spec §7.2 object graph: view.viewer.child.pdfViewer (.pdfViewer inner)

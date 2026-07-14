@@ -62,7 +62,9 @@ export class ViewerSession {
   }
 
   attach(): Promise<void> {
-    if (this.state === "attached" || this.state === "degraded") return Promise.resolve();
+    if (this.state === "attached") return Promise.resolve();
+    // Degraded sessions may re-probe - host handles could have become available (H-12).
+    if (this.state === "degraded") { this.state = "discovered"; /* allow new probe below */ }
     this.state = "probing";
     const gen = this.generation;
     const start = Date.now();

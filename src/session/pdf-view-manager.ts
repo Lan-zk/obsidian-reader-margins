@@ -18,6 +18,8 @@ export class PdfViewManager {
     this.plugin = plugin;
     plugin.registerEvent(plugin.app.workspace.on("layout-change", () => this.reconcile()));
     plugin.registerEvent(plugin.app.workspace.on("active-leaf-change", () => this.reconcile()));
+    plugin.registerEvent(plugin.app.workspace.on("window-open", () => this.reconcile()));
+    plugin.registerEvent(plugin.app.workspace.on("window-close", () => this.reconcile()));
     plugin.register(() => this.stop());
     this.reconcile();
   }
@@ -42,8 +44,8 @@ export class PdfViewManager {
       seen.add(leaf);
       const path = view.file?.path ?? "";
       const existing = this.sessions.get(leaf);
-      if (existing && existing.pdfPath === path) return; // unchanged
-      // Same leaf, different file (or stale session): dispose old, create new.
+      if (existing && existing.pdfPath === path && existing.state !== "degraded") return; // unchanged
+      // Same leaf, different file, or degraded session needing a retry (H-12).
       if (existing) { existing.dispose(); this.sessions.delete(leaf); }
       const session = new ViewerSession(view, path, this.store);
       this.sessions.set(leaf, session);
