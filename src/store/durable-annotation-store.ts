@@ -48,6 +48,22 @@ export class DurableAnnotationStore {
   byPath(path: string): AnnotationRecordV1[] { return this.indexes.byPath(path); }
   byId(path: string, id: string): AnnotationRecordV1 | undefined { return this.indexes.byId(path, id); }
 
+  // Compatibility repair for documents created before PDF.js 5.x fingerprint
+  // discovery was supported. Never rewrites an already-verified fingerprint and
+  // never adopts a signature when the page count differs.
+  upgradeLegacySourceSignature(path: string, verified: DocumentSignature): boolean {
+    if (this.isReadonly || !verified.pdfFingerprint || verified.pdfFingerprint === "unknown") return false;
+    const doc = this.data.documents[path];
+    if (!doc || doc.sourceSignature.pdfFingerprint !== "unknown") return false;
+    if (doc.sourceSignature.numPages !== verified.numPages) return false;
+
+    doc.sourceSignature = { ...verified };
+    doc.revision++;
+    this.data.stateRevision++;
+    this.commit(path, Object.values(doc.annotations).map((ann) => ({ id: ann.id, page: ann.anchor.pageNumber })));
+    return true;
+  }
+
   create(path: string, input: CreateAnnotationInput, signature: DocumentSignature): MutationResult {
     if (this.isReadonly) return { ok: false, reason: "store is read-only" };
     if (!this.signatureMatches(path, signature)) return { ok: false, reason: "source signature mismatch; refusing to bind annotations" };

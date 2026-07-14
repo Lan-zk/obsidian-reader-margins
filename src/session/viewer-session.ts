@@ -89,6 +89,11 @@ export class ViewerSession {
     // Probe the real signature state (no hardcoded "verified") and capabilities.
     const fp = readPdfFingerprint(h);
     const pc = readPageCount(h);
+    // Older builds persisted the sentinel fingerprint "unknown" because they
+    // read PDF.js's removed singular `fingerprint` property. Bind that legacy
+    // record to the now-readable fingerprint only when its page count agrees.
+    // Verified-to-verified mismatches still fail closed below.
+    if (fp && pc) this.store.upgradeLegacySourceSignature(this.pdfPath, { pdfFingerprint: fp, numPages: pc });
     this.signature = fp && pc ? { pdfFingerprint: fp, numPages: pc } : null;
     const sigState = this.probeSignatureState(fp, pc);
     this.caps = probeCapabilities(h, { sourceSignature: sigState });

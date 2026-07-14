@@ -46,6 +46,26 @@ describe("ViewerSession (M-1)", () => {
     expect(session.state).toBe("degraded");
     session.dispose();
   });
+  it("upgrades a legacy unknown fingerprint and renders its existing annotations", async () => {
+    const { view, pages } = buildHostFixture({ fingerprint: "verified-fp", numPages: 1, marginWidthPx: 200 });
+    const store = makeStore();
+    const anchor = {
+      kind: "pdf-text" as const, version: 1 as const, pageNumber: 1,
+      quote: { exact: "legacy", normalization: "collapse-whitespace-v1" as const },
+      geometry: { space: "page-css-v1" as const, pageWidth: 600, pageHeight: 800, rotation: 0 as const, rects: [{ x: 10, y: 10, width: 50, height: 14 }] },
+    };
+    const created = store.create("test.pdf", { markStyle: "highlight", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c", anchor }, { pdfFingerprint: "unknown", numPages: 1 });
+    expect(created.ok).toBe(true);
+
+    const session = new ViewerSession(view as any, "test.pdf", store);
+    await session.attach();
+    session.reconcilePage(1);
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    expect(store.data.documents["test.pdf"].sourceSignature.pdfFingerprint).toBe("verified-fp");
+    expect(pages[0].el.querySelector(".rm-mark")).toBeTruthy();
+    session.dispose();
+  });
   it("does not render annotations when sourceSignature mismatches (PDF replaced)", async () => {
     const { view, pages } = buildHostFixture({ fingerprint: "fp-a", numPages: 1, marginWidthPx: 200 });
     const store = makeStore();

@@ -47,6 +47,26 @@ describe("DurableAnnotationStore", () => {
     expect(res.ok).toBe(false);
     expect((res as any).reason).toMatch(/signature/i);
   });
+  it("upgrades a legacy unknown fingerprint only when the verified PDF has the same page count", async () => {
+    const save = vi.fn(async (_data: any) => {});
+    const s = new DurableAnnotationStore(save);
+    s.loadAndValidate(null);
+    const created = s.create("a.pdf", input(), { pdfFingerprint: "unknown", numPages: 3 });
+    expect(created.ok).toBe(true);
+
+    expect(s.upgradeLegacySourceSignature("a.pdf", { pdfFingerprint: "verified-fp", numPages: 3 })).toBe(true);
+    expect(s.data.documents["a.pdf"].sourceSignature).toEqual({ pdfFingerprint: "verified-fp", numPages: 3 });
+    expect(s.byPath("a.pdf")).toHaveLength(1);
+    await s.flushBestEffort();
+    expect(save.mock.calls.at(-1)?.[0].documents["a.pdf"].sourceSignature).toEqual({ pdfFingerprint: "verified-fp", numPages: 3 });
+
+    expect(s.upgradeLegacySourceSignature("a.pdf", { pdfFingerprint: "other-fp", numPages: 3 })).toBe(false);
+    expect(s.data.documents["a.pdf"].sourceSignature).toEqual({ pdfFingerprint: "verified-fp", numPages: 3 });
+
+    s.create("b.pdf", input(), { pdfFingerprint: "unknown", numPages: 3 });
+    expect(s.upgradeLegacySourceSignature("b.pdf", { pdfFingerprint: "verified-fp", numPages: 4 })).toBe(false);
+    expect(s.data.documents["b.pdf"].sourceSignature).toEqual({ pdfFingerprint: "unknown", numPages: 3 });
+  });
   it("update with stale baseRevision is rejected", () => {
     const save = vi.fn(async () => {});
     const s = new DurableAnnotationStore(save);
