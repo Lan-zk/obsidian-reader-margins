@@ -2,6 +2,7 @@
 import { DEFAULT_COLORS, DEFAULT_COLOR_ID, validateHexColor, normalizeColors, type ColorConfigV1 } from "src/domain/colors";
 import { DEFAULT_LANGUAGE, isLanguage, type Language } from "src/i18n";
 import type { AnnotationRecordV1 } from "src/domain/annotation";
+import type { AnchorRect } from "src/domain/pdf-text-anchor";
 
 export interface PluginSettingsV1 {
   colors: ColorConfigV1[];
@@ -61,9 +62,127 @@ export function parsePluginData(raw: unknown): { state: DataLoadState; data: Plu
       schemaVersion: 1,
       stateRevision: typeof r.stateRevision === "number" ? r.stateRevision : 0,
       settings: { colors, defaultColorId, language },
-      documents: (documents ?? {}) as Record<string, PdfAnnotationDocumentV1>,
+      documents: sanitizeDocuments(documents),
     },
   };
+}
+
+// --- Runtime schema validation (H-02) ---
+// Deep-validate every document/annotation on load. Corrupt records are isolated
+// (dropped) rather than crashing the index rebuild or reaching the DOM/CSS. The
+// plugin stays usable with the valid subset; nothing is rendered from untrusted
+// fields.
+function isObj(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+function isFiniteNum(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
+function sanitizeAnnotation(raw: unknown): AnnotationRecordV1 | null {
+  if (!isObj(raw)) return null;
+  const a = raw;
+  if (typeof a.id !== "string" || !a.id) return null;
+  if (!isFiniteNum(a.revision)) return null;
+  if (a.type !== "text-mark") return null;
+  if (a.markStyle !== "highlight" && a.markStyle !== "underline") return null;
+  if (typeof a.colorLabelSnapshot !== "string") return null;
+  if (typeof a.colorValueSnapshot !== "string" || !validateHexColor(a.colorValueSnapshot)) return null;
+  if (typeof a.createdAt !== "string" || typeof a.updatedAt !== "string") return null;
+
+  const anchor = a.anchor;
+  if (!isObj(anchor)) return null;
+  if (anchor.kind !== "pdf-text" || anchor.version !== 1) return null;
+  if (!isFiniteNum(anchor.pageNumber) || anchor.pageNumber < 1) return null;
+  const quote = anchor.quote;
+  if (!isObj(quote) || typeof quote.exact !== "string" || quote.normalization !== "collapse-whitespace-v1") return null;
+  const geometry = anchor.geometry;
+  if (!isObj(geometry)) return null;
+  if (geometry.space !== "page-css-v1") return null;
+  if (!isFiniteNum(geometry.pageWidth) || geometry.pageWidth <= 0) return null;
+  if (!isFiniteNum(geometry.pageHeight) || geometry.pageHeight <= 0) return null;
+  if (![0, 90, 180, 270].includes(geometry.rotation as number)) return null;
+  if (!Array.isArray(geometry.rects) || geometry.rects.length === 0) return null;
+  const rects: AnchorRect[] = [];
+  for (const rr of geometry.rects) {
+    if (!isObj(rr)) continue;
+    const x = rr.x; const y = rr.y; const width = rr.width; const height = rr.height;
+    if (!isFiniteNum(x) || !isFiniteNum(y) || !isFiniteNum(width) || !isFiniteNum(height)) continue;
+    rects.push({ x, y, width, height });
+  }
+  if (rects.length === 0) return null;
+
+  const locator = isObj(anchor.locator)
+    ? {
+        beginIndex: Number(anchor.locator.beginIndex),
+        beginOffset: Number(anchor.locator.beginOffset),
+        endIndex: Number(anchor.locator.endIndex),
+        endOffset: Number(anchor.locator.endOffset),
+      }
+    : undefined;
+
+  return {
+    id: a.id,
+    revision: a.revision,
+    type: "text-mark",
+    markStyle: a.markStyle,
+    colorIdSnapshot: typeof a.colorIdSnapshot === "string" ? a.colorIdSnapshot : undefined,
+    colorLabelSnapshot: a.colorLabelSnapshot,
+    colorValueSnapshot: a.colorValueSnapshot,
+    comment: typeof a.comment === "string" ? a.comment : undefined,
+    anchor: {
+      kind: "pdf-text",
+      version: 1,
+      pageNumber: anchor.pageNumber,
+      locator,
+      quote: {
+        exact: quote.exact,
+        normalization: "collapse-whitespace-v1",
+        prefix: typeof quote.prefix === "string" ? quote.prefix : undefined,
+        suffix: typeof quote.suffix === "string" ? quote.suffix : undefined,
+      },
+      geometry: {
+        space: "page-css-v1",
+        pageWidth: geometry.pageWidth,
+        pageHeight: geometry.pageHeight,
+        rotation: geometry.rotation as 0 | 90 | 180 | 270,
+        rects,
+      },
+    },
+    createdAt: a.createdAt,
+    updatedAt: a.updatedAt,
+  };
+}
+
+function sanitizeDocument(raw: unknown): PdfAnnotationDocumentV1 | null {
+  if (!isObj(raw)) return null;
+  const d = raw;
+  if (typeof d.documentId !== "string" || !d.documentId) return null;
+  const sig = d.sourceSignature;
+  if (!isObj(sig) || typeof sig.pdfFingerprint !== "string" || !isFiniteNum(sig.numPages) || sig.numPages < 1) return null;
+  if (!isFiniteNum(d.revision)) return null;
+  if (!isObj(d.annotations)) return null;
+  const annotations: Record<string, AnnotationRecordV1> = {};
+  for (const [id, ann] of Object.entries(d.annotations)) {
+    const s = sanitizeAnnotation(ann);
+    if (s) annotations[id] = s;
+  }
+  return {
+    documentId: d.documentId,
+    sourceSignature: { pdfFingerprint: sig.pdfFingerprint, numPages: sig.numPages },
+    revision: d.revision,
+    annotations,
+  };
+}
+
+function sanitizeDocuments(raw: unknown): Record<string, PdfAnnotationDocumentV1> {
+  if (!isObj(raw)) return {};
+  const out: Record<string, PdfAnnotationDocumentV1> = {};
+  for (const [path, doc] of Object.entries(raw)) {
+    const d = sanitizeDocument(doc);
+    if (d) out[path] = d;
+  }
+  return out;
 }
 
 // Deep clone via structuredClone for snapshots (spec §10.6 immutable snapshot).
