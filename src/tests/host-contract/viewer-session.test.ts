@@ -64,7 +64,7 @@ describe("ViewerSession (M-1)", () => {
     expect(pages[0].el.querySelector(".rm-mark")).toBeTruthy();
 
     // PDF replaced at the same path with a different fingerprint
-    (view as any).viewer.child.pdfViewer.pdfViewer.pdfDocument = { fingerprint: "fp-b" };
+    (view as any).viewer.child.pdfViewer.pdfViewer.pdfDocument = { fingerprints: ["fp-b", null] };
     session.reconcilePage(1);
     await nextFrame();
     expect(pages[0].el.querySelector(".rm-mark")).toBeNull();
@@ -83,12 +83,12 @@ describe("ViewerSession (M-1)", () => {
     await session.attach();
     const nextFrame = () => new Promise<void>((r) => setTimeout(r, 20));
 
-    (view as any).viewer.child.pdfViewer.pdfViewer.pdfDocument = { fingerprint: "fp-b" };
+    (view as any).viewer.child.pdfViewer.pdfViewer.pdfDocument = { fingerprints: ["fp-b", null] };
     session.reconcilePage(1);
     await nextFrame();
     expect(pages[0].el.querySelector(".rm-mark")).toBeNull();
 
-    (view as any).viewer.child.pdfViewer.pdfViewer.pdfDocument = { fingerprint: "fp-a" };
+    (view as any).viewer.child.pdfViewer.pdfViewer.pdfDocument = { fingerprints: ["fp-a", null] };
     session.reconcilePage(1);
     await nextFrame();
     expect(pages[0].el.querySelector(".rm-mark")).toBeTruthy();

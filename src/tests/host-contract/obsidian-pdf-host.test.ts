@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { buildHostFixture } from "src/tests/host-contract/host-shape-fixture";
-import { probeHostHandles } from "src/host/obsidian-pdf-host";
+import { probeHostHandles, readPdfFingerprint } from "src/host/obsidian-pdf-host";
 import { probeCapabilities } from "src/host/host-capabilities";
 
 describe("probeHostHandles", () => {
@@ -43,5 +43,21 @@ describe("probeCapabilities", () => {
     const { view } = buildHostFixture({ includeToolbar: false });
     const caps = probeCapabilities(probeHostHandles(view)!, {});
     expect(caps.toolbarSlot).toBe("missing");
+  });
+});
+
+describe("readPdfFingerprint", () => {
+  it("reads fingerprints[0] (PDF.js 5.x API)", () => {
+    const { view } = buildHostFixture({ fingerprint: "fp-a" });
+    expect(readPdfFingerprint(probeHostHandles(view)!)).toBe("fp-a");
+  });
+  it("returns undefined when fingerprints[0] is null", () => {
+    const { view } = buildHostFixture({});
+    (view as any).viewer.child.pdfViewer.pdfViewer.pdfDocument = { fingerprints: [null, null] };
+    expect(readPdfFingerprint(probeHostHandles(view)!)).toBeUndefined();
+  });
+  it("returns undefined when no pdfDocument", () => {
+    const { view } = buildHostFixture({});
+    expect(readPdfFingerprint(probeHostHandles(view)!)).toBeUndefined();
   });
 });

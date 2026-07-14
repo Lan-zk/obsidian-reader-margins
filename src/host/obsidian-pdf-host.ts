@@ -68,11 +68,14 @@ export function findPageEl(h: HostHandles, pageNumber: number): HTMLElement | nu
 
 // Read PDF fingerprint for sourceSignature (spec §10.2). Private access - defensive.
 // pdfDocument may be on the wrapper or the inner PDF.js viewer; check both.
-// fingerprint is a getter on PDFDocumentProxy; also check _pdfInfo as a fallback.
+// PDF.js 5.x exposes `fingerprints` (a [string|null, string|null] getter) on
+// PDFDocumentProxy; fingerprints[0] is the primary fingerprint and is always
+// present. Older `fingerprint`/`_pdfInfo.fingerprint` kept as fallbacks.
 export function readPdfFingerprint(h: HostHandles): string | undefined {
   const doc = (h.obsidianViewer as any)?.pdfDocument ?? (h.pdfJsViewer as any)?.pdfDocument;
   if (!doc) return undefined;
-  const fp = doc.fingerprint ?? doc._pdfInfo?.fingerprint;
+  const fps = doc.fingerprints;
+  const fp = Array.isArray(fps) ? fps[0] : (doc.fingerprint ?? doc._pdfInfo?.fingerprint);
   return typeof fp === "string" && fp.length > 0 ? fp : undefined;
 }
 
