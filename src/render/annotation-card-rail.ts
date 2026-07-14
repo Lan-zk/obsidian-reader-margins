@@ -64,6 +64,8 @@ export interface BuildCardInput {
   anchorY: number;
   editing?: boolean;
   draftValue?: string;
+  cardLeft: number;
+  cardWidth: number;
 }
 
 // Card layout (docs/design.md): border-defined card on the base surface (no gray
@@ -80,8 +82,8 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
   card.dataset.annotationId = input.id;
   card.style.position = "absolute";
   card.style.top = `${input.anchorY}px`;
-  card.style.left = "0";
-  card.style.right = "0"; // fill the rail width so all cards on a side are equally wide
+  card.style.left = `${input.cardLeft}px`;
+  card.style.width = `${input.cardWidth}px`;
   card.style.setProperty("--rm-card-color", input.color); // 标注色 as a token: hover tints bg + deepens border per color
 
   // Grip drag-handle (top-right): pointerdown starts a drag; dblclick resets position.
@@ -91,7 +93,7 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
   grip.title = t("card.drag");
   grip.setAttribute("aria-label", t("card.drag.aria"));
   grip.appendChild(createIcon(doc, "grip", 14));
-  grip.addEventListener("pointerdown", (e) => { e.stopPropagation(); cb.onDragStart(input.id, e, card); });
+  grip.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); cb.onDragStart(input.id, e, card); });
   grip.addEventListener("dblclick", (e) => { e.stopPropagation(); cb.onResetPosition(input.id); });
   card.appendChild(grip);
 

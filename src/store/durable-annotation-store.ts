@@ -78,11 +78,13 @@ export class DurableAnnotationStore {
     if (!ann) return { ok: false, reason: "annotation not found" };
     if (ann.revision !== baseRevision) return { ok: false, reason: "revision conflict; annotation was modified elsewhere" };
     const applied = { ...patch };
-    // cardPosition: clamp y to the page's own height (page-css space). undefined clears it.
+    // cardPosition: clamp y to the page's own height (page-css space). x (viewer-container px)
+    // is passed through. undefined clears the whole position.
     if (applied.cardPosition !== undefined && applied.cardPosition !== null) {
       const ph = ann.anchor.geometry.pageHeight;
       const y = Number.isFinite(applied.cardPosition.y) ? applied.cardPosition.y : 0;
-      applied.cardPosition = { space: "page-css-v1", y: Math.max(0, Math.min(y, ph)) };
+      const x = Number.isFinite(applied.cardPosition.x) ? applied.cardPosition.x : undefined;
+      applied.cardPosition = { space: "page-css-v1", y: Math.max(0, Math.min(y, ph)), ...(x !== undefined ? { x } : {}) };
     }
     Object.assign(ann, applied);
     ann.revision++;

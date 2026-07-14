@@ -12,6 +12,7 @@ import { drawEphemeralMark, clearMarks } from "src/render/mark-renderer";
 import { buildCard, type CardCallbacks } from "src/render/annotation-card-rail";
 import { drawEphemeralConnector } from "src/render/connector-renderer";
 import { layoutCards } from "src/render/card-layout-engine";
+import { computeCardRailGeometry } from "src/render/card-drag-geometry";
 import { unionCenter, cleanGeometry } from "src/domain/pdf-text-anchor";
 import { captureAnchor } from "src/domain/anchor-resolver";
 import { ExportModal } from "src/export/export-modal";
@@ -197,15 +198,14 @@ export class ViewerSession {
     const anns = this.store.byPage(this.pdfPath, pageNumber);
     if (anns.length === 0) return;
 
-    // Page offset within the container (walk offsetParent chain) so card/connector
-    // coordinates are container-relative and align with the page-scaled marks.
-    let offsetX = 0, offsetY = 0;
-    let node: HTMLElement | null = pageEl;
-    while (node && node !== container) {
-      offsetX += node.offsetLeft;
-      offsetY += node.offsetTop;
-      node = node.offsetParent as HTMLElement | null;
-    }
+    const containerRect = container.getBoundingClientRect();
+    const pageRect = pageEl.getBoundingClientRect();
+    // Convert viewport rectangles to the scroll container's content coordinates.
+    // This is stable across PDF.js wrapper/offsetParent changes and page number.
+    const offsetX = pageRect.left - containerRect.left + container.scrollLeft;
+    const offsetY = pageRect.top - containerRect.top + container.scrollTop;
+    const containerWidth = container.offsetWidth || containerRect.width || parseFloat(container.style.width) || 0;
+    const pageWidth = pageEl.offsetWidth || pageRect.width || anns[0]?.anchor.geometry.pageWidth * scale || 0;
 
     // First pass: draw marks, create cards (unpositioned), group by side.
     type Entry = { ann: AnnotationRecordV1; card: HTMLElement; anchorY: number; markCenterY: number; markEdgeX: number; pinTop?: number };
@@ -217,7 +217,8 @@ export class ViewerSession {
       drawEphemeralMark(pageEl, rects, ann.colorValueSnapshot, ann.markStyle, scale);
       const first = rects[0];
       const side: "left" | "right" = unionCenter(rects).x < ann.anchor.geometry.pageWidth / 2 ? "left" : "right";
-      const markCenterY = offsetY + (first.y + first.height / 2) * scale;
+      const anchorY = (first.y + first.height / 2) * scale;
+      const markCenterY = offsetY + anchorY;
       const railClass = side === "left" ? "rm-card-rail-left" : "rm-card-rail-right";
       let rail = container.querySelector<HTMLElement>(`.${railClass}`);
       if (!rail) {
@@ -228,20 +229,29 @@ export class ViewerSession {
       const isEditing = this.editingId === ann.id;
       const quoteText = ann.anchor.quote.exact;
       const quote = quoteText.length > 60 ? quoteText.slice(0, 60) + "…" : quoteText;
+      const horizontal = computeCardRailGeometry({
+        side,
+        containerLeft: container.scrollLeft,
+        containerWidth,
+        pageLeft: offsetX,
+        pageRight: offsetX + pageWidth,
+        storedX: ann.cardPosition?.x,
+      });
       const card = buildCard(rail, {
         id: ann.id, quote, comment: ann.comment, color: ann.colorValueSnapshot,
         colors: this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name })),
         side, anchorY: markCenterY, editing: isEditing,
         draftValue: isEditing ? this.draft.peek(ann.id)?.value : undefined,
+        cardLeft: horizontal.x,
+        cardWidth: horizontal.cardWidth,
       }, this.cardCallbacks(), this.t ?? makeT("auto", "en"));
       const markEdgeX = side === "left" ? offsetX + first.x * scale : offsetX + (first.x + first.width) * scale;
-      const pinTop = ann.cardPosition ? offsetY + ann.cardPosition.y * scale : undefined;
-      bySide[side].push({ ann, card, anchorY: markCenterY, markCenterY, markEdgeX, pinTop });
+      const pinTop = ann.cardPosition ? ann.cardPosition.y * scale : undefined;
+      bySide[side].push({ ann, card, anchorY, markCenterY, markEdgeX, pinTop });
     }
 
     // Second pass: layout each side (push-down to avoid overlap), apply positions, draw connectors.
-    const pageHeight = pageEl.offsetHeight;
-    const containerWidth = container.offsetWidth;
+    const pageHeight = pageEl.offsetHeight || pageRect.height;
     for (const side of ["left", "right"] as const) {
       const group = bySide[side];
       if (group.length === 0) continue;
@@ -250,13 +260,14 @@ export class ViewerSession {
         entries: group.map((g) => ({ annotationId: g.ann.id, anchorY: g.anchorY, cardHeight: g.card.offsetHeight || 40, pinTop: g.pinTop })),
       });
       const rail = container.querySelector<HTMLElement>(side === "left" ? ".rm-card-rail-left" : ".rm-card-rail-right");
-      const railWidth = rail?.offsetWidth ?? 0;
-      const cardEdgeX = side === "left" ? railWidth : containerWidth - railWidth;
+      const railLeft = rail?.offsetLeft ?? 0;
       for (const g of group) {
         const pos = out.positions.get(g.ann.id);
-        if (pos) g.card.style.top = `${pos.top}px`;
+        if (pos) g.card.style.top = `${offsetY + pos.top}px`;
         const cardHeight = g.card.offsetHeight || 40;
-        const cardCenterY = (pos?.top ?? g.anchorY) + cardHeight / 2;
+        const cardCenterY = offsetY + (pos?.top ?? g.anchorY) + cardHeight / 2;
+        // Connector ends at the card's page-facing edge (follows horizontal drag).
+        const cardEdgeX = side === "left" ? railLeft + g.card.offsetLeft + g.card.offsetWidth : railLeft + g.card.offsetLeft;
         drawEphemeralConnector(container, { x1: g.markEdgeX, y1: g.markCenterY, x2: cardEdgeX, y2: cardCenterY, color: g.ann.colorValueSnapshot, id: g.ann.id, selected: this.hoveredId === g.ann.id });
       }
     }
@@ -381,6 +392,23 @@ export class ViewerSession {
     const startCardTopVp = card.getBoundingClientRect().top;   // card top, viewport px
     const minVp = pageRect.top;                                // page top (viewport)
     const maxVp = Math.max(minVp, pageRect.bottom - cardHeight); // clamp keeps card inside the page
+    // Horizontal coordinates are container-relative because both rails span the
+    // full container. This keeps stored x stable and gives both sides one model.
+    const container = this.handles.viewerContainerEl;
+    const containerRect = container.getBoundingClientRect();
+    const cardWidth = card.offsetWidth || 40;
+    const startLeft = parseFloat(card.style.left) || 0;
+    const startX = e.clientX;
+    const side = card.closest(".rm-card-rail-left") ? "left" : "right";
+    const horizontal = computeCardRailGeometry({
+      side,
+      containerLeft: container.scrollLeft,
+      containerWidth: containerRect.width || container.offsetWidth || parseFloat(container.style.width) || 0,
+      pageLeft: pageRect.left - containerRect.left + container.scrollLeft,
+      pageRight: pageRect.right - containerRect.left + container.scrollLeft,
+      storedX: startLeft,
+      cardWidth,
+    });
     const baseRevision = ann.revision;
     const grip = card.querySelector<HTMLElement>(".rm-card-grip") ?? card;
     let moved = false;
@@ -389,9 +417,12 @@ export class ViewerSession {
     try { grip.setPointerCapture(e.pointerId); } catch { /* pointer already released */ }
     const onMove = (ev: PointerEvent) => {
       const dy = ev.clientY - startY;
-      if (Math.abs(dy) > 1) moved = true;
-      const nextVp = Math.max(minVp, Math.min(startCardTopVp + dy, maxVp));
-      card.style.top = `${startTop + (nextVp - startCardTopVp)}px`;
+      const dx = ev.clientX - startX;
+      if (Math.abs(dy) > 1 || Math.abs(dx) > 1) moved = true;
+      const nextTopVp = Math.max(minVp, Math.min(startCardTopVp + dy, maxVp));
+      card.style.top = `${startTop + (nextTopVp - startCardTopVp)}px`;
+      const nextLeft = Math.max(horizontal.minX, Math.min(startLeft + dx, horizontal.maxX));
+      card.style.left = `${nextLeft}px`;
     };
     const onUp = () => {
       grip.removeEventListener("pointermove", onMove);
@@ -403,9 +434,10 @@ export class ViewerSession {
       // Flush any re-renders deferred during the drag.
       if (this.pendingReconcile.size > 0) this.reconcilePage([...this.pendingReconcile][0]);
       if (!moved) return; // a click, not a drag - let dblclick handle reset
-      const finalVp = card.getBoundingClientRect().top;
-      const y = (finalVp - pageRect.top) / scale; // page-relative, unscaled (zoom-stable)
-      this.store.update(this.pdfPath, id, { cardPosition: { space: "page-css-v1", y } }, baseRevision);
+      const finalRect = card.getBoundingClientRect();
+      const y = (finalRect.top - pageRect.top) / scale; // page-relative, unscaled (zoom-stable)
+      const x = parseFloat(card.style.left) || 0;        // viewer-container content px (zoom-stable)
+      this.store.update(this.pdfPath, id, { cardPosition: { space: "page-css-v1", y, x } }, baseRevision);
     };
     grip.addEventListener("pointermove", onMove);
     grip.addEventListener("pointerup", onUp);

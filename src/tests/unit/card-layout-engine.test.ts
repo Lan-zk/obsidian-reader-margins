@@ -73,4 +73,27 @@ describe("CardLayoutEngine", () => {
     });
     expect(out.positions.get("a")!.top).toBe(160); // 200 - 40
   });
+  it("treats every pinned card as an obstacle before placing automatic cards", () => {
+    const out = layoutCards({
+      pageHeight: 800, railScrollTop: 0, railViewportHeight: 800,
+      entries: [
+        { annotationId: "free", anchorY: 100, cardHeight: 40 },
+        { annotationId: "pin", anchorY: 500, cardHeight: 60, pinTop: 120 },
+      ],
+    });
+    expect(out.positions.get("pin")!.top).toBe(120);
+    expect(out.positions.get("free")!.top).toBe(188); // pin bottom 180 + 8px gap
+  });
+  it("keeps cards inside the page when push-down crosses the page bottom", () => {
+    const out = layoutCards({
+      pageHeight: 800, railScrollTop: 0, railViewportHeight: 800,
+      entries: [
+        { annotationId: "a", anchorY: 700, cardHeight: 80 },
+        { annotationId: "b", anchorY: 710, cardHeight: 80 },
+      ],
+    });
+    expect(out.mode).toBe("dense");
+    expect(out.positions.get("a")!.top).toBeGreaterThanOrEqual(0);
+    expect(out.positions.get("b")!.top).toBeLessThanOrEqual(720);
+  });
 });

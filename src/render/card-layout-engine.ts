@@ -15,64 +15,68 @@ export interface LayoutOutput {
 
 const GAP_PX = 8;
 
-// Place cards in reading order (anchorY ascending). A card with `pinTop` is pinned
-// to that position (clamped to the page) and becomes a fixed obstacle; unpinned
-// cards push down past all occupied intervals so nothing overlaps a pin. Dense mode
-// (total > pageHeight) additionally clamps into [0, pageHeight], pins first.
+// Inputs are page-local pixels. Pinned cards become obstacles before any automatic
+// card is placed, regardless of anchor order. Automatic cards then push down with
+// an 8px gap. Dense mode keeps every card inside the page; when the page cannot
+// physically contain them all, automatic cards may overlap at the lower boundary.
 export function layoutCards(input: LayoutInput): LayoutOutput {
   const entries = [...input.entries].sort((a, b) => a.anchorY - b.anchorY);
   const positions = new Map<string, CardPosition>();
-  // Occupied [top, bottom] intervals (container px) from already-placed cards.
   const occupied: Array<[number, number]> = [];
+  const maxTop = (e: LayoutEntry) => Math.max(0, input.pageHeight - e.cardHeight);
+  const clampTop = (e: LayoutEntry, top: number) => Math.max(0, Math.min(top, maxTop(e)));
+  const addOccupied = (top: number, height: number) => {
+    occupied.push([top, top + height]);
+    occupied.sort((a, b) => a[0] - b[0]);
+  };
 
-  const place = (e: LayoutEntry): number => {
-    let top: number;
-    if (e.pinTop != null) {
-      top = Math.max(0, Math.min(e.pinTop, input.pageHeight - e.cardHeight));
-    } else {
-      top = e.anchorY;
-      for (const [oTop, oBottom] of occupied) {
-        if (top + e.cardHeight <= oTop) break;      // fits before this obstacle
-        if (top < oBottom) top = oBottom + GAP_PX;  // overlaps -> push past
+  const avoidOccupied = (e: LayoutEntry, initialTop: number, clampToPage: boolean): number => {
+    let top = clampToPage ? clampTop(e, initialTop) : Math.max(0, initialTop);
+    for (const [oTop, oBottom] of occupied) {
+      if (top + e.cardHeight <= oTop - GAP_PX) break;
+      if (top < oBottom + GAP_PX && top + e.cardHeight > oTop - GAP_PX) {
+        top = oBottom + GAP_PX;
+        if (clampToPage) top = Math.min(top, maxTop(e));
       }
     }
-    occupied.push([top, top + e.cardHeight]);
-    occupied.sort((a, b) => a[0] - b[0]);
     return top;
   };
 
-  let bottom = -Infinity;
-  for (const e of entries) {
-    const top = place(e);
+  for (const e of entries.filter((entry) => entry.pinTop != null)) {
+    const top = clampTop(e, e.pinTop!);
     positions.set(e.annotationId, { top });
-    if (top + e.cardHeight > bottom) bottom = top + e.cardHeight;
+    addOccupied(top, e.cardHeight);
+  }
+  for (const e of entries.filter((entry) => entry.pinTop == null)) {
+    const top = avoidOccupied(e, e.anchorY, false);
+    positions.set(e.annotationId, { top });
+    addOccupied(top, e.cardHeight);
   }
 
-  const totalHeight = bottom === -Infinity ? 0 : bottom - (entries[0]?.anchorY ?? 0);
-  const dense = totalHeight > input.pageHeight;
+  const requiredHeight = entries.reduce((sum, e) => sum + e.cardHeight, 0)
+    + Math.max(0, entries.length - 1) * GAP_PX;
+  const crossesPageBoundary = entries.some((e) => {
+    const top = positions.get(e.annotationId)?.top ?? 0;
+    return top + e.cardHeight > input.pageHeight;
+  });
+  const dense = requiredHeight > input.pageHeight || crossesPageBoundary;
 
   if (!dense) {
     return { mode: "normal", positions, visibleCardIds: entries.map((e) => e.annotationId) };
   }
 
-  // dense: clamp into [0, pageHeight]; pins stay fixed, others clamp + re-push.
   const clamped = new Map<string, CardPosition>();
-  const denseOccupied: Array<[number, number]> = [];
-  for (const e of entries) {
-    let top: number;
-    if (e.pinTop != null) {
-      top = Math.max(0, Math.min(e.pinTop, input.pageHeight - e.cardHeight));
-    } else {
-      const natural = positions.get(e.annotationId)!.top;
-      top = Math.max(0, Math.min(natural, input.pageHeight - e.cardHeight));
-      for (const [oTop, oBottom] of denseOccupied) {
-        if (top + e.cardHeight <= oTop) break;
-        if (top < oBottom) top = Math.min(oBottom + GAP_PX, input.pageHeight - e.cardHeight);
-      }
-    }
+  occupied.length = 0;
+  for (const e of entries.filter((entry) => entry.pinTop != null)) {
+    const top = clampTop(e, e.pinTop!);
     clamped.set(e.annotationId, { top });
-    denseOccupied.push([top, top + e.cardHeight]);
-    denseOccupied.sort((a, b) => a[0] - b[0]);
+    addOccupied(top, e.cardHeight);
+  }
+  for (const e of entries.filter((entry) => entry.pinTop == null)) {
+    const natural = positions.get(e.annotationId)?.top ?? e.anchorY;
+    const top = avoidOccupied(e, natural, true);
+    clamped.set(e.annotationId, { top });
+    addOccupied(top, e.cardHeight);
   }
 
   const lo = input.railScrollTop, hi = input.railScrollTop + input.railViewportHeight;

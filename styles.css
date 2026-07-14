@@ -36,29 +36,31 @@
 .rm-mark { position: absolute; pointer-events: none; }
 
 /* --- Card rails ----------------------------------------------------------- */
-.rm-card-rail { position: absolute; top: 0; bottom: 0; width: clamp(200px, 300px, 340px); pointer-events: auto; }
-.rm-card-rail-left { left: 0; }
-.rm-card-rail-right { right: 0; }
+.rm-card-rail { position: absolute; inset: 0; left: 0; right: 0; pointer-events: none; z-index: 10; }
+.rm-card-rail-left, .rm-card-rail-right { left: 0; right: 0; }
 
 /* --- Cards: border-defined on the base surface, 1px colored border, 8px radius (Atomic Minimalism) -- */
 .rm-card {
-  position: relative;
+  position: absolute;
+  z-index: 1;
+  pointer-events: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;                      /* 4px grid: 8px between text area and ops */
   padding: 10px;                 /* design.md: cards 8px padding */
-  margin-bottom: 8px;
   background-color: var(--rm-surface); /* base surface: the 1px colored border defines the card (no gray fill) */
   border: 1px solid var(--rm-card-color, var(--rm-outline-variant)); /* annotation color, set inline via --rm-card-color */
   border-radius: 8px;            /* design.md: cards 8px radius */
   max-height: 240px;
-  box-sizing: border-box;        /* width:100% (left:0;right:0) includes border+padding */
+  box-sizing: border-box;
+  min-width: 0;
   color: var(--rm-on-surface);
   font-family: "Hanken Grotesk", var(--font-text), var(--default-font), sans-serif;
   transition: background-color 120ms ease-out, border-color 120ms ease-out;
 }
 /* Hover = selected state: per-color tint + deepened annotation border (no generic gray/dark ring). */
 .rm-card:hover {
+  z-index: 2;
   background-color: color-mix(in srgb, var(--rm-card-color) 14%, var(--rm-surface));
   border-color: color-mix(in srgb, var(--rm-card-color) 70%, var(--rm-on-surface));
 }
@@ -78,22 +80,28 @@
   word-break: break-word; white-space: pre-wrap; cursor: text;
 }
 /* Operation row: fixed at card bottom; color swatches (left) + delete (right) */
-.rm-card-ops { display: none; justify-content: space-between; align-items: center; flex: 0 0 auto; }
-.rm-card:hover .rm-card-ops, .rm-card:focus-within .rm-card-ops { display: flex; }
-.rm-card-ops-edit { display: flex; justify-content: flex-end; gap: 4px; flex: 0 0 auto; }
+.rm-card-ops {
+  display: flex; justify-content: space-between; align-items: center; flex: 0 0 auto;
+  min-height: 18px; visibility: hidden; opacity: 0; pointer-events: none;
+}
+.rm-card:hover .rm-card-ops, .rm-card:focus-within .rm-card-ops { visibility: visible; opacity: 1; pointer-events: auto; }
+.rm-card-ops-edit {
+  display: flex; justify-content: flex-end; gap: 4px; flex: 0 0 auto;
+  visibility: visible; opacity: 1; pointer-events: auto;
+}
 .rm-card-colors { display: inline-flex; gap: 6px; align-items: center; }
 /* Grip drag-handle (top-right); revealed on hover, future drag starts here. */
 .rm-card-grip {
   position: absolute; top: 4px; right: 4px; z-index: 1;
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; background: transparent; border: none; border-radius: 4px;
-  cursor: grab; padding: 0; color: var(--rm-on-surface-variant); opacity: 0;
+  cursor: grab; padding: 0; color: var(--rm-on-surface-variant); opacity: 0; touch-action: none;
   transition: opacity 120ms ease-out, color 120ms ease-out, background-color 120ms ease-out;
 }
 .rm-card:hover .rm-card-grip { opacity: 0.7; }
 .rm-card-grip:hover { opacity: 1; color: var(--rm-on-surface); background-color: var(--rm-surface-3); }
 /* Dragging: follow the pointer without lag, lift above siblings, suppress selection. */
-.rm-card-dragging { z-index: 50; transition: none !important; user-select: none; }
+.rm-card-dragging { z-index: 3; transition: none !important; user-select: none; }
 .rm-card-dragging .rm-card-grip { cursor: grabbing; opacity: 1; }
 .rm-color-swatch {
   width: 16px; height: 16px; border-radius: 9999px; border: 1px solid var(--rm-outline-variant);
@@ -132,7 +140,7 @@
 .rm-card-linked { animation: rm-card-flash 1.4s ease-out; }
 
 /* --- Connector: flat muted line + anchor dot ------------------------------ */
-.rm-connector-layer { position: absolute; inset: 0; pointer-events: none; z-index: 100; overflow: visible; }
+.rm-connector-layer { position: absolute; inset: 0; pointer-events: none; z-index: 5; overflow: visible; }
 .rm-connector path { transition: opacity 200ms ease-out; stroke-dasharray: 4 3; }
 .rm-connector circle { transition: opacity 200ms ease-out; }
 /* Dashes flow toward the card when its link is active (mark click) or selected. */
