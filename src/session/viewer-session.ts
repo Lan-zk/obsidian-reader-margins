@@ -17,6 +17,7 @@ import { captureAnchor } from "src/domain/anchor-resolver";
 import { ExportModal } from "src/export/export-modal";
 import { MarkdownExportService } from "src/export/markdown-export-service";
 import { hitTestAnnotation } from "src/render/page-projection";
+import { makeT, type Translate } from "src/i18n";
 import type { DurableAnnotationStore } from "src/store/durable-annotation-store";
 import { signatureMismatch } from "src/host/source-signature";
 import type { AnnotationRecordV1, DocumentSignature, MutationResult } from "src/domain/annotation";
@@ -44,10 +45,12 @@ export class ViewerSession {
   private opts: Required<ViewerSessionOptions>;
   private signature: DocumentSignature | null = null;
   private sigWarned = false;
+  private t: Translate | null = null;
   private pendingReconcile = new Set<number>();
   private rafId: number | null = null;
   private editingId: string | null = null;
   private hoveredId: string | null = null;
+  private draggingId: string | null = null;
   private draft = new DraftController();
   private toolbar: ToolbarController | null = null;
 
@@ -109,8 +112,13 @@ export class ViewerSession {
     // Subscribe to store changes: re-reconcile affected pages (spec §6.2).
     const unsub = this.store.onChange((path, ids) => {
       if (path === "settings") {
+        // Language or colors may have changed: refresh the translator, toolbar,
+        // and all visible cards.
+        this.t = this.makeT();
         const colors = this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name }));
+        this.toolbar?.updateT(this.t);
         this.toolbar?.updateColors(colors, this.store.data.settings.defaultColorId);
+        this.reconcileAllVisiblePages();
         return;
       }
       if (path !== this.pdfPath) return;
@@ -125,12 +133,13 @@ export class ViewerSession {
     this.scope.addDispose(unsub);
 
     this.state = "attached";
+    this.t = this.makeT();
     const pages = h.viewerEl.querySelectorAll<HTMLElement>(".page[data-page-number]");
     pages.forEach((p) => this.reconcilePage(parseInt(p.dataset.pageNumber ?? "", 10)));
 
     // Toolbar (color swatches / underline / export / persistence status)
     const colors = this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name }));
-    this.toolbar = new ToolbarController(h, colors, this.store.data.settings.defaultColorId);
+    this.toolbar = new ToolbarController(h, colors, this.store.data.settings.defaultColorId, this.t);
     this.toolbar.render({
       onColor: (colorId) => { const r = this.createAnnotation("highlight", colorId); if (!r.ok) new Notice(r.reason); },
       onUnderline: () => { const r = this.createAnnotation("underline"); if (!r.ok) new Notice(r.reason); },
@@ -146,6 +155,7 @@ export class ViewerSession {
   reconcilePage(pageNumber: number): void {
     if (!this.handles || this.state !== "attached") return;
     this.pendingReconcile.add(pageNumber);
+    if (this.draggingId) return; // defer re-render during a drag; flushed when it ends
     if (this.rafId !== null) return;
     const gen = this.generation;
     const win = this.handles.viewerEl.ownerDocument.defaultView;
@@ -153,6 +163,7 @@ export class ViewerSession {
     this.rafId = win.requestAnimationFrame(() => {
       if (this.generation !== gen) { this.rafId = null; return; }
       this.rafId = null;
+      if (this.draggingId) return; // a drag started after scheduling; defer
       this.flushReconcile();
     });
   }
@@ -197,7 +208,7 @@ export class ViewerSession {
     }
 
     // First pass: draw marks, create cards (unpositioned), group by side.
-    type Entry = { ann: AnnotationRecordV1; card: HTMLElement; anchorY: number; markCenterY: number; markEdgeX: number };
+    type Entry = { ann: AnnotationRecordV1; card: HTMLElement; anchorY: number; markCenterY: number; markEdgeX: number; pinTop?: number };
     const bySide: Record<"left" | "right", Entry[]> = { left: [], right: [] };
     for (const ann of anns) {
       // Re-clean stored rects at render time so already-saved annotations also
@@ -222,9 +233,10 @@ export class ViewerSession {
         colors: this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name })),
         side, anchorY: markCenterY, editing: isEditing,
         draftValue: isEditing ? this.draft.peek(ann.id)?.value : undefined,
-      }, this.cardCallbacks());
+      }, this.cardCallbacks(), this.t ?? makeT("auto", "en"));
       const markEdgeX = side === "left" ? offsetX + first.x * scale : offsetX + (first.x + first.width) * scale;
-      bySide[side].push({ ann, card, anchorY: markCenterY, markCenterY, markEdgeX });
+      const pinTop = ann.cardPosition ? offsetY + ann.cardPosition.y * scale : undefined;
+      bySide[side].push({ ann, card, anchorY: markCenterY, markCenterY, markEdgeX, pinTop });
     }
 
     // Second pass: layout each side (push-down to avoid overlap), apply positions, draw connectors.
@@ -235,7 +247,7 @@ export class ViewerSession {
       if (group.length === 0) continue;
       const out = layoutCards({
         pageHeight, railScrollTop: 0, railViewportHeight: pageHeight,
-        entries: group.map((g) => ({ annotationId: g.ann.id, anchorY: g.anchorY, cardHeight: g.card.offsetHeight || 40 })),
+        entries: group.map((g) => ({ annotationId: g.ann.id, anchorY: g.anchorY, cardHeight: g.card.offsetHeight || 40, pinTop: g.pinTop })),
       });
       const rail = container.querySelector<HTMLElement>(side === "left" ? ".rm-card-rail-left" : ".rm-card-rail-right");
       const railWidth = rail?.offsetWidth ?? 0;
@@ -290,12 +302,12 @@ export class ViewerSession {
 
   private openExport(): void {
     const app = (this.view as any).app;
-    if (!app) { new Notice("无法导出：应用不可用"); return; }
+    if (!app) { new Notice(this.t!("notice.cannotExport")); return; }
     const annotations = this.store.byPath(this.pdfPath);
     const doc = this.store.data.documents[this.pdfPath];
-    if (!doc || annotations.length === 0) { new Notice("当前 PDF 没有批注"); return; }
+    if (!doc || annotations.length === 0) { new Notice(this.t!("notice.noAnnotations")); return; }
     const service = new MarkdownExportService(app);
-    new ExportModal(app, this.pdfPath, annotations, { documentId: doc.documentId, documentRevision: doc.revision }, service).open();
+    new ExportModal(app, this.pdfPath, annotations, { documentId: doc.documentId, documentRevision: doc.revision }, service, this.t!).open();
   }
 
   // Click on a rendered mark -> hit-test in page-css coords -> flash the card (spec §12.2).
@@ -351,6 +363,62 @@ export class ViewerSession {
     }
   }
 
+  // Drag a card via its grip: live `top` follows the pointer (clamped to the
+  // anchor page's band), committed to the store on pointerup as a page-css y.
+  // Re-render is deferred during the drag so the card element survives.
+  private beginDrag(id: string, e: PointerEvent, card: HTMLElement): void {
+    if (!this.handles) return;
+    if (e.button !== 0) return; // primary button only
+    const ann = this.store.byId(this.pdfPath, id);
+    if (!ann) return;
+    const pageEl = findPageEl(this.handles, ann.anchor.pageNumber);
+    if (!pageEl) return;
+    const scale = readCurrentScale(this.handles);
+    const pageRect = pageEl.getBoundingClientRect();
+    const cardHeight = card.offsetHeight || 40;
+    const startTop = parseFloat(card.style.top) || 0;          // card top, container-content px
+    const startY = e.clientY;
+    const startCardTopVp = card.getBoundingClientRect().top;   // card top, viewport px
+    const minVp = pageRect.top;                                // page top (viewport)
+    const maxVp = Math.max(minVp, pageRect.bottom - cardHeight); // clamp keeps card inside the page
+    const baseRevision = ann.revision;
+    const grip = card.querySelector<HTMLElement>(".rm-card-grip") ?? card;
+    let moved = false;
+    this.draggingId = id;
+    card.classList.add("rm-card-dragging");
+    try { grip.setPointerCapture(e.pointerId); } catch { /* pointer already released */ }
+    const onMove = (ev: PointerEvent) => {
+      const dy = ev.clientY - startY;
+      if (Math.abs(dy) > 1) moved = true;
+      const nextVp = Math.max(minVp, Math.min(startCardTopVp + dy, maxVp));
+      card.style.top = `${startTop + (nextVp - startCardTopVp)}px`;
+    };
+    const onUp = () => {
+      grip.removeEventListener("pointermove", onMove);
+      grip.removeEventListener("pointerup", onUp);
+      grip.removeEventListener("pointercancel", onUp);
+      try { grip.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+      card.classList.remove("rm-card-dragging");
+      this.draggingId = null;
+      // Flush any re-renders deferred during the drag.
+      if (this.pendingReconcile.size > 0) this.reconcilePage([...this.pendingReconcile][0]);
+      if (!moved) return; // a click, not a drag - let dblclick handle reset
+      const finalVp = card.getBoundingClientRect().top;
+      const y = (finalVp - pageRect.top) / scale; // page-relative, unscaled (zoom-stable)
+      this.store.update(this.pdfPath, id, { cardPosition: { space: "page-css-v1", y } }, baseRevision);
+    };
+    grip.addEventListener("pointermove", onMove);
+    grip.addEventListener("pointerup", onUp);
+    grip.addEventListener("pointercancel", onUp);
+  }
+
+  // Clear a user-dragged position: return the card to auto-layout.
+  private resetCardPosition(id: string): void {
+    const ann = this.store.byId(this.pdfPath, id);
+    if (!ann || !ann.cardPosition) return;
+    this.store.update(this.pdfPath, id, { cardPosition: undefined }, ann.revision);
+  }
+
   private resolveSignature(): DocumentSignature | null {
     if (!this.handles) return null;
     const fp = readPdfFingerprint(this.handles);
@@ -359,6 +427,25 @@ export class ViewerSession {
     // If the fingerprint is inaccessible, fall back to "unknown" - numPages still
     // guards against same-path replacement with a different-length PDF (spec §10.2).
     return { pdfFingerprint: fp ?? "unknown", numPages: pc };
+  }
+
+  private makeT(): Translate {
+    const lang = this.store.data.settings.language;
+    const locale = (this.view as any)?.app?.locale ?? "en";
+    return makeT(lang, locale);
+  }
+
+  // Public translator accessor for command/palette notices.
+  tNotice(key: string, vars?: Record<string, string>): string {
+    return (this.t ?? makeT("auto", "en"))(key, vars);
+  }
+
+  private reconcileAllVisiblePages(): void {
+    if (!this.handles) return;
+    this.handles.viewerEl.querySelectorAll<HTMLElement>(".page[data-page-number]").forEach((p) => {
+      const n = parseInt(p.dataset.pageNumber ?? "", 10);
+      if (Number.isFinite(n)) this.reconcilePage(n);
+    });
   }
 
   // True when the live PDF's signature differs from the stored document's. No
@@ -370,7 +457,7 @@ export class ViewerSession {
     if (!sig) return false;
     const mismatched = signatureMismatch(doc.sourceSignature, sig);
     if (mismatched && !this.sigWarned) {
-      new Notice("Reader Margins: PDF 已替换，旧批注暂不显示（签名不匹配）。", 8000);
+      new Notice(this.t!("notice.pdfReplaced"), 8000);
       this.sigWarned = true;
     } else if (!mismatched) {
       this.sigWarned = false; // PDF swapped back; allow re-rendering
@@ -385,6 +472,8 @@ export class ViewerSession {
     };
     return {
       onHover: (id, on) => this.hoverCard(on ? id : null),
+      onDragStart: (id, e, card) => this.beginDrag(id, e, card),
+      onResetPosition: (id) => this.resetCardPosition(id),
       onEdit: (id) => {
         const ann = this.store.byId(this.pdfPath, id);
         if (!ann) return;
@@ -400,7 +489,7 @@ export class ViewerSession {
         this.draft.cancel(id);
         if (!ann) return;
         const result = this.store.update(this.pdfPath, id, { comment: value }, baseRev);
-        if (!result.ok) new Notice("该批注已在另一窗口修改");
+        if (!result.ok) new Notice(this.t!("notice.conflict"));
       },
       onCancelEdit: (id) => {
         this.editingId = null;
@@ -425,9 +514,9 @@ export class ViewerSession {
         if (result.ok) {
           this.removeAnnotationDom(id);
           this.reconcilePage(page); // clear mark + redraw remaining
-          showUndoNotice("已删除批注", () => {
+          showUndoNotice(this.t!("notice.deleted"), this.t!("notice.undo"), () => {
             const sig = this.resolveSignature();
-            if (!sig) { new Notice("无法恢复：签名不可用"); return; }
+            if (!sig) { new Notice(this.t!("notice.cannotRestore")); return; }
             this.store.create(this.pdfPath, {
               markStyle: tombstone.markStyle,
               colorId: tombstone.colorIdSnapshot ?? this.store.data.settings.defaultColorId,

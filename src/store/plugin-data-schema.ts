@@ -1,10 +1,12 @@
 // src/store/plugin-data-schema.ts
 import { DEFAULT_COLORS, DEFAULT_COLOR_ID, validateHexColor, normalizeColors, type ColorConfigV1 } from "src/domain/colors";
+import { DEFAULT_LANGUAGE, isLanguage, type Language } from "src/i18n";
 import type { AnnotationRecordV1 } from "src/domain/annotation";
 
 export interface PluginSettingsV1 {
   colors: ColorConfigV1[];
   defaultColorId: string;
+  language: Language;
 }
 
 export interface PdfAnnotationDocumentV1 {
@@ -27,7 +29,7 @@ export function makeDefaultData(): PluginDataV1 {
   return {
     schemaVersion: 1,
     stateRevision: 0,
-    settings: { colors: DEFAULT_COLORS.map((c) => ({ ...c })), defaultColorId: DEFAULT_COLOR_ID },
+    settings: { colors: DEFAULT_COLORS.map((c) => ({ ...c })), defaultColorId: DEFAULT_COLOR_ID, language: DEFAULT_LANGUAGE },
     documents: {},
   };
 }
@@ -46,6 +48,7 @@ export function parsePluginData(raw: unknown): { state: DataLoadState; data: Plu
   if (colors.length === 0) return { state: "invalid", data: null };
   const defaultColorId = typeof settings.defaultColorId === "string" ? settings.defaultColorId : colors[0].id;
   if (!colors.some((c) => c.id === defaultColorId)) return { state: "invalid", data: null };
+  const language = isLanguage(settings.language) ? settings.language : DEFAULT_LANGUAGE;
 
   const documents = r.documents;
   if (documents !== undefined && (typeof documents !== "object" || documents === null)) {
@@ -57,7 +60,7 @@ export function parsePluginData(raw: unknown): { state: DataLoadState; data: Plu
     data: {
       schemaVersion: 1,
       stateRevision: typeof r.stateRevision === "number" ? r.stateRevision : 0,
-      settings: { colors, defaultColorId },
+      settings: { colors, defaultColorId, language },
       documents: (documents ?? {}) as Record<string, PdfAnnotationDocumentV1>,
     },
   };

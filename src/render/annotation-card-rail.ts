@@ -1,5 +1,6 @@
 // src/render/annotation-card-rail.ts
 import { createIcon } from "src/render/icons";
+import type { Translate } from "src/i18n";
 
 export interface EphemeralCardInput {
   side: "left" | "right";
@@ -45,6 +46,8 @@ export function drawEphemeralCard(
 
 export interface CardCallbacks {
   onHover: (id: string, on: boolean) => void;
+  onDragStart: (id: string, e: PointerEvent, card: HTMLElement) => void;
+  onResetPosition: (id: string) => void;
   onEdit: (id: string) => void;
   onCommitComment: (id: string, value: string) => void;
   onCancelEdit: (id: string) => void;
@@ -67,7 +70,7 @@ export interface BuildCardInput {
 // fill), quote with 1px left line, comment, color swatches (left) + delete (right),
 // grip drag-handle (top-right). Hover = selected state.
 // All text via textContent; never innerHTML (spec §14.1).
-export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCallbacks): HTMLElement {
+export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCallbacks, t: Translate): HTMLElement {
   const doc = parent.ownerDocument;
   // Dedup: remove existing card for this annotation (re-render).
   parent.querySelectorAll(`.rm-card[data-annotation-id="${input.id}"]`).forEach((n) => n.remove());
@@ -81,13 +84,15 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
   card.style.right = "0"; // fill the rail width so all cards on a side are equally wide
   card.style.setProperty("--rm-card-color", input.color); // 标注色 as a token: hover tints bg + deepens border per color
 
-  // Grip drag-handle (top-right); future drag starts on pointerdown here.
+  // Grip drag-handle (top-right): pointerdown starts a drag; dblclick resets position.
   const grip = doc.createElement("button");
   grip.type = "button";
   grip.className = "rm-card-grip";
-  grip.title = "拖动";
-  grip.setAttribute("aria-label", "拖动批注卡片");
+  grip.title = t("card.drag");
+  grip.setAttribute("aria-label", t("card.drag.aria"));
   grip.appendChild(createIcon(doc, "grip", 14));
+  grip.addEventListener("pointerdown", (e) => { e.stopPropagation(); cb.onDragStart(input.id, e, card); });
+  grip.addEventListener("dblclick", (e) => { e.stopPropagation(); cb.onResetPosition(input.id); });
   card.appendChild(grip);
 
   // Hover = selected state: highlight this card's connector (the card itself is
@@ -120,10 +125,10 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     const commitOnce = () => { if (done) return; done = true; cb.onCommitComment(input.id, ta.value); };
     const cancelOnce = () => { if (done) return; done = true; cb.onCancelEdit(input.id); };
     const save = doc.createElement("button");
-    save.className = "rm-card-save"; save.title = "保存 (Cmd+Enter)"; save.appendChild(createIcon(doc, "check", 14));
+    save.className = "rm-card-save"; save.title = t("card.save"); save.appendChild(createIcon(doc, "check", 14));
     save.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); commitOnce(); });
     const cancel = doc.createElement("button");
-    cancel.className = "rm-card-cancel"; cancel.title = "取消 (Esc)"; cancel.appendChild(createIcon(doc, "x", 14));
+    cancel.className = "rm-card-cancel"; cancel.title = t("card.cancel"); cancel.appendChild(createIcon(doc, "x", 14));
     cancel.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); cancelOnce(); });
     actions.append(save, cancel);
     card.appendChild(actions);
@@ -152,12 +157,12 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
       sw.className = "rm-color-swatch";
       sw.style.background = c.value;
       sw.title = c.label;
-      sw.setAttribute("aria-label", `颜色 ${c.label}`);
+      sw.setAttribute("aria-label", t("card.color.aria", { label: c.label }));
       sw.addEventListener("click", (e) => { e.stopPropagation(); cb.onChangeColor(input.id, c.id); });
       colorsGroup.appendChild(sw);
     }
     const del = doc.createElement("button");
-    del.className = "rm-card-delete"; del.title = "删除"; del.appendChild(createIcon(doc, "trash", 14));
+    del.className = "rm-card-delete"; del.title = t("card.delete"); del.appendChild(createIcon(doc, "trash", 14));
     del.addEventListener("click", (e) => { e.stopPropagation(); cb.onDelete(input.id); });
     ops.append(colorsGroup, del);
     card.appendChild(ops);

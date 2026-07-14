@@ -44,7 +44,7 @@ export default class ReaderMarginsPlugin extends Plugin {
         if (!session || !session.hasSelection()) return false;
         if (checking) return true;
         const result = session.createAnnotation("highlight");
-        if (!result.ok) new Notice(`Cannot highlight: ${result.reason}`);
+        if (!result.ok) new Notice(session.tNotice("notice.cannotHighlight", { reason: result.reason }));
       },
     });
     this.addCommand({
@@ -55,7 +55,7 @@ export default class ReaderMarginsPlugin extends Plugin {
         if (!session || !session.hasSelection()) return false;
         if (checking) return true;
         const result = session.createAnnotation("underline");
-        if (!result.ok) new Notice(`Cannot underline: ${result.reason}`);
+        if (!result.ok) new Notice(session.tNotice("notice.cannotUnderline", { reason: result.reason }));
       },
     });
   }

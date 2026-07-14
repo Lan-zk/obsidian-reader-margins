@@ -14,6 +14,8 @@ export const DEFAULT_COLORS: ColorConfigV1[] = [
 
 export const DEFAULT_COLOR_ID = "yellow";
 
+export const MAX_COLORS = 6;
+
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 
 export function validateHexColor(s: unknown): string | null {
@@ -24,12 +26,14 @@ export function findColor(colors: ColorConfigV1[], id: string): ColorConfigV1 | 
   return colors.find((c) => c.id === id);
 }
 
-// spec §10.8 + §13.3: at least one color, valid hex, non-empty id.
+// spec §10.8 + §13.3: at least one color, valid hex, non-empty id. Capped at
+// MAX_COLORS so an over-long list (e.g. from an older build) is truncated on load.
 export function normalizeColors(input: unknown[]): ColorConfigV1[] {
   const out: ColorConfigV1[] = [];
   const seen = new Set<string>();
   let autoIdx = 0;
   for (const raw of input) {
+    if (out.length >= MAX_COLORS) break;
     const r = raw as Record<string, unknown>;
     const value = validateHexColor(r?.value);
     if (!value) continue;
@@ -56,6 +60,7 @@ export function validateSettingsMutation(
   defaultColorId: string,
 ): { ok: true } | { ok: false; reason: string } {
   if (rows.length === 0) return { ok: false, reason: "At least one color is required." };
+  if (rows.length > MAX_COLORS) return { ok: false, reason: `At most ${MAX_COLORS} colors are allowed.` };
   const names = new Set<string>();
   for (const r of rows) {
     if (!r.name.trim()) return { ok: false, reason: "Color name cannot be empty." };

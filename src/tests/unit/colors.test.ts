@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_COLORS, validateHexColor, findColor, normalizeColors } from "src/domain/colors";
+import { DEFAULT_COLORS, validateHexColor, findColor, normalizeColors, validateSettingsMutation, MAX_COLORS } from "src/domain/colors";
 
 describe("colors", () => {
   it("validates #RRGGBB", () => {
@@ -28,5 +28,14 @@ describe("colors", () => {
     ]);
     expect(out.map((c) => c.id)).toEqual(["a", "auto-1", "auto-2"]);
     expect(out.every((c) => validateHexColor(c.value))).toBe(true);
+  });
+  it("normalizeColors caps at MAX_COLORS", () => {
+    const input = Array.from({ length: MAX_COLORS + 4 }, (_, i) => ({ id: `c${i}`, name: `C${i}`, value: "#111111" }));
+    expect(normalizeColors(input)).toHaveLength(MAX_COLORS);
+  });
+  it("validateSettingsMutation rejects more than MAX_COLORS", () => {
+    const rows = Array.from({ length: MAX_COLORS + 1 }, (_, i) => ({ id: `c${i}`, name: `C${i}`, value: "#111111" }));
+    expect(validateSettingsMutation(rows, "c0").ok).toBe(false);
+    expect(validateSettingsMutation(rows.slice(0, MAX_COLORS), "c0").ok).toBe(true);
   });
 });

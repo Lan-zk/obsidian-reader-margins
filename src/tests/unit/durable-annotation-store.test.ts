@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { DurableAnnotationStore } from "src/store/durable-annotation-store";
+import { DEFAULT_COLORS, DEFAULT_COLOR_ID } from "src/domain/colors";
 import type { CreateAnnotationInput } from "src/domain/annotation";
 import type { PdfTextAnchorV1 } from "src/domain/pdf-text-anchor";
 
@@ -74,5 +75,36 @@ describe("DurableAnnotationStore", () => {
     const res = s.create("a.pdf", input(), SIG) as any;
     s.delete("a.pdf", res.annotation.id);
     expect(s.data.documents["a.pdf"]).toBeUndefined();
+  });
+  it("addColor refuses beyond MAX_COLORS (6)", () => {
+    const s = new DurableAnnotationStore(async () => {});
+    s.loadAndValidate(null);
+    // defaults already have 4; fill to 6
+    expect(s.addColor()).toBe(true);
+    expect(s.addColor()).toBe(true);
+    expect(s.data.settings.colors).toHaveLength(6);
+    expect(s.addColor()).toBe(false); // 7th rejected
+    expect(s.data.settings.colors).toHaveLength(6);
+  });
+  it("resetSettings restores defaults (colors, default, language)", () => {
+    const s = new DurableAnnotationStore(async () => {});
+    s.loadAndValidate(null);
+    s.addColor();
+    s.setLanguage("zh");
+    s.setDefaultColor(s.data.settings.colors[1].id);
+    expect(s.data.settings.colors.length).toBeGreaterThan(DEFAULT_COLORS.length);
+    expect(s.data.settings.language).toBe("zh");
+    s.resetSettings();
+    expect(s.data.settings.colors.map((c) => c.id)).toEqual(DEFAULT_COLORS.map((c) => c.id));
+    expect(s.data.settings.defaultColorId).toBe(DEFAULT_COLOR_ID);
+    expect(s.data.settings.language).toBe("auto");
+  });
+  it("setLanguage persists a valid language and ignores invalid", () => {
+    const s = new DurableAnnotationStore(async () => {});
+    s.loadAndValidate(null);
+    s.setLanguage("zh");
+    expect(s.data.settings.language).toBe("zh");
+    s.setLanguage("fr" as any);
+    expect(s.data.settings.language).toBe("zh"); // unchanged
   });
 });

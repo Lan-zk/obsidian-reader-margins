@@ -92,6 +92,9 @@
 }
 .rm-card:hover .rm-card-grip { opacity: 0.7; }
 .rm-card-grip:hover { opacity: 1; color: var(--rm-on-surface); background-color: var(--rm-surface-3); }
+/* Dragging: follow the pointer without lag, lift above siblings, suppress selection. */
+.rm-card-dragging { z-index: 50; transition: none !important; user-select: none; }
+.rm-card-dragging .rm-card-grip { cursor: grabbing; opacity: 1; }
 .rm-color-swatch {
   width: 16px; height: 16px; border-radius: 9999px; border: 1px solid var(--rm-outline-variant);
   cursor: pointer; padding: 0; transition: transform 120ms ease-out;

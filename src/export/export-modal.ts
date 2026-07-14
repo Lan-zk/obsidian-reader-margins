@@ -2,6 +2,7 @@
 import { App, Modal, Setting } from "obsidian";
 import { MarkdownExportService } from "src/export/markdown-export-service";
 import type { AnnotationRecordV1 } from "src/domain/annotation";
+import type { Translate } from "src/i18n";
 
 export interface ExportModalMeta {
   documentId: string;
@@ -17,6 +18,7 @@ export class ExportModal extends Modal {
     private annotations: AnnotationRecordV1[],
     private meta: ExportModalMeta,
     private service: MarkdownExportService,
+    private t: Translate,
   ) {
     super(app);
     const base = pdfPath.slice(pdfPath.lastIndexOf("/") + 1).replace(/\.pdf$/i, "");
@@ -26,14 +28,15 @@ export class ExportModal extends Modal {
 
   onOpen(): void {
     const { contentEl } = this;
-    contentEl.createEl("h2", { text: "导出 Markdown 批注快照" });
+    const t = this.t;
+    contentEl.createEl("h2", { text: t("modal.export.title") });
     new Setting(contentEl)
-      .setName("目标路径")
-      .setDesc("覆盖已有快照需属于同一 PDF（按 frontmatter 判定）。")
-      .addText((t) => t.setValue(this.targetPath).onChange((v) => (this.targetPath = v)));
+      .setName(t("modal.targetPath"))
+      .setDesc(t("modal.targetPath.desc"))
+      .addText((input) => input.setValue(this.targetPath).onChange((v) => (this.targetPath = v)));
     new Setting(contentEl)
       .addButton((b) =>
-        b.setButtonText("导出").setCta().onClick(() => {
+        b.setButtonText(t("modal.export")).setCta().onClick(() => {
           const base = this.targetPath.slice(this.targetPath.lastIndexOf("/") + 1).replace(/\.md$/, "");
           void this.service.export(this.annotations, {
             pdfBaseName: base,
@@ -44,7 +47,7 @@ export class ExportModal extends Modal {
           this.close();
         }),
       )
-      .addButton((b) => b.setButtonText("取消").onClick(() => this.close()));
+      .addButton((b) => b.setButtonText(t("modal.cancel")).onClick(() => this.close()));
   }
 
   onClose(): void {

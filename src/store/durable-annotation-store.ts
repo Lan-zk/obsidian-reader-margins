@@ -3,7 +3,8 @@ import { parsePluginData, makeDefaultData, snapshotData, type PluginDataV1, type
 import { AnnotationIndexes } from "src/store/indexes";
 import { PersistenceCoordinator, type PersistenceStatus } from "src/store/persistence-coordinator";
 import type { AnnotationRecordV1, CreateAnnotationInput, MutationResult, DocumentSignature } from "src/domain/annotation";
-import { normalizeColors, canDeleteColor, validateSettingsMutation } from "src/domain/colors";
+import { normalizeColors, canDeleteColor, validateSettingsMutation, MAX_COLORS, DEFAULT_COLORS, DEFAULT_COLOR_ID } from "src/domain/colors";
+import { isLanguage, DEFAULT_LANGUAGE, type Language } from "src/i18n";
 
 export type ChangeEvent = (pdfPath: string, changedIds: string[]) => void;
 
@@ -70,13 +71,20 @@ export class DurableAnnotationStore {
     return { ok: true, annotation: structuredClone(record), revision: this.data.stateRevision };
   }
 
-  update(path: string, id: string, patch: Partial<Pick<AnnotationRecordV1, "comment" | "markStyle" | "colorValueSnapshot" | "colorLabelSnapshot" | "colorIdSnapshot">>, baseRevision: number): MutationResult {
+  update(path: string, id: string, patch: Partial<Pick<AnnotationRecordV1, "comment" | "markStyle" | "colorValueSnapshot" | "colorLabelSnapshot" | "colorIdSnapshot" | "cardPosition">>, baseRevision: number): MutationResult {
     if (this.isReadonly) return { ok: false, reason: "store is read-only" };
     const doc = this.data.documents[path];
     const ann = doc?.annotations[id];
     if (!ann) return { ok: false, reason: "annotation not found" };
     if (ann.revision !== baseRevision) return { ok: false, reason: "revision conflict; annotation was modified elsewhere" };
-    Object.assign(ann, patch);
+    const applied = { ...patch };
+    // cardPosition: clamp y to the page's own height (page-css space). undefined clears it.
+    if (applied.cardPosition !== undefined && applied.cardPosition !== null) {
+      const ph = ann.anchor.geometry.pageHeight;
+      const y = Number.isFinite(applied.cardPosition.y) ? applied.cardPosition.y : 0;
+      applied.cardPosition = { space: "page-css-v1", y: Math.max(0, Math.min(y, ph)) };
+    }
+    Object.assign(ann, applied);
     ann.revision++;
     ann.updatedAt = new Date().toISOString();
     doc.revision++;
@@ -101,15 +109,17 @@ export class DurableAnnotationStore {
   // --- Settings mutations (spec §13.3) ---
   // Renaming/changing a color value does NOT write back to existing annotation
   // snapshots; only future creates and the toolbar reflect the new settings.
-  addColor(): void {
-    if (this.isReadonly) return;
+  addColor(): boolean {
+    if (this.isReadonly) return false;
     const colors = this.data.settings.colors;
+    if (colors.length >= MAX_COLORS) return false;
     const ids = new Set(colors.map((c) => c.id));
     let n = colors.length + 1;
     let id = `color-${n}`;
     while (ids.has(id)) { n++; id = `color-${n}`; }
     colors.push({ id, name: `Color ${n}`, value: "#cccccc" });
     this.commitSettings();
+    return true;
   }
 
   deleteColor(id: string): void {
@@ -127,6 +137,24 @@ export class DurableAnnotationStore {
     this.commitSettings();
   }
 
+  setLanguage(lang: Language): void {
+    if (this.isReadonly) return;
+    if (!isLanguage(lang)) return;
+    this.data.settings.language = lang;
+    this.commitSettings();
+  }
+
+  // Restore colors, default color, and language to their built-in defaults.
+  resetSettings(): void {
+    if (this.isReadonly) return;
+    this.data.settings = {
+      colors: DEFAULT_COLORS.map((c) => ({ ...c })),
+      defaultColorId: DEFAULT_COLOR_ID,
+      language: DEFAULT_LANGUAGE,
+    };
+    this.commitSettings();
+  }
+
   // Persist the current settings. Returns the validation result so the UI can
   // surface problems (duplicate names, empty names). Invalid hex/ids are
   // defensively normalized before saving (spec §10.8).
@@ -137,6 +165,7 @@ export class DurableAnnotationStore {
     if (settings.colors.length > 0 && !settings.colors.some((c) => c.id === settings.defaultColorId)) {
       settings.defaultColorId = settings.colors[0].id;
     }
+    if (!isLanguage(settings.language)) settings.language = DEFAULT_LANGUAGE;
     const result = validateSettingsMutation(settings.colors, settings.defaultColorId);
     this.data.stateRevision++;
     this.indexes.rebuild(this.data);

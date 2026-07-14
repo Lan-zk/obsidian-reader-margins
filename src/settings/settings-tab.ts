@@ -1,7 +1,8 @@
 // src/settings/settings-tab.ts
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type ReaderMarginsPlugin from "src/main";
-import { validateHexColor, canDeleteColor, validateSettingsMutation } from "src/domain/colors";
+import { validateHexColor, canDeleteColor, validateSettingsMutation, MAX_COLORS } from "src/domain/colors";
+import { makeT, type Language, type Translate } from "src/i18n";
 
 // Re-export the pure rules so tests can import them from the settings module.
 export { canDeleteColor, validateSettingsMutation };
@@ -13,21 +14,26 @@ export class ReaderMarginsSettingsTab extends PluginSettingTab {
     super(app, plugin);
   }
 
+  private t(): Translate {
+    const lang = this.plugin.store.data.settings.language;
+    const locale = (this.app as any).locale ?? "en";
+    return makeT(lang, locale);
+  }
+
   display(): void {
     const { containerEl } = this;
+    const t = this.t();
     containerEl.empty();
-    containerEl.createEl("h2", { text: "批注颜色" });
 
+    containerEl.createEl("h2", { text: t("settings.section.colors") });
     const colors = this.plugin.store.data.settings.colors;
     const defaultId = this.plugin.store.data.settings.defaultColorId;
 
     for (const c of colors) {
       const setting = new Setting(containerEl)
-        .setName("颜色")
+        .setName(t("color.label"))
         .addText((text) =>
-          text
-            .setValue(c.name)
-            .onChange((v) => { c.name = v; }),
+          text.setValue(c.name).onChange((v) => { c.name = v; }),
         )
         .addColorPicker((picker) =>
           picker.setValue(c.value).onChange((v) => {
@@ -37,29 +43,29 @@ export class ReaderMarginsSettingsTab extends PluginSettingTab {
         );
       if (canDeleteColor(colors, c.id, defaultId)) {
         setting.addButton((btn) =>
-          btn.setButtonText("删除").onClick(() => {
+          btn.setButtonText(t("color.delete")).onClick(() => {
             this.plugin.store.deleteColor(c.id);
             this.display();
           }),
         );
       } else {
-        setting.addButton((btn) => btn.setButtonText("删除").setDisabled(true));
+        setting.addButton((btn) => btn.setButtonText(t("color.delete")).setDisabled(true));
       }
-      // Commit on blur so typing does not persist half-edited state.
       setting.settingEl.addEventListener("focusout", () => {
         const result = this.plugin.store.commitSettings();
         if (!result.ok) new Notice(result.reason, 4000);
       });
     }
 
-    new Setting(containerEl).addButton((btn) =>
-      btn.setButtonText("添加颜色").onClick(() => {
-        this.plugin.store.addColor();
+    new Setting(containerEl).addButton((btn) => {
+      btn.setButtonText(t("color.add")).onClick(() => {
+        if (!this.plugin.store.addColor()) new Notice(t("color.cannotAdd"), 4000);
         this.display();
-      }),
-    );
+      });
+      if (colors.length >= MAX_COLORS) btn.setDisabled(true).setTooltip(t("color.cannotAdd"));
+    });
 
-    containerEl.createEl("h2", { text: "默认颜色" });
+    containerEl.createEl("h2", { text: t("settings.section.default") });
     new Setting(containerEl).addDropdown((dd) => {
       for (const c of colors) dd.addOption(c.id, c.name);
       dd.setValue(defaultId).onChange((id: string) => {
@@ -67,5 +73,26 @@ export class ReaderMarginsSettingsTab extends PluginSettingTab {
         this.display();
       });
     });
+
+    containerEl.createEl("h2", { text: t("settings.section.language") });
+    new Setting(containerEl).addDropdown((dd) => {
+      dd.addOption("auto", t("language.auto"));
+      dd.addOption("en", t("language.en"));
+      dd.addOption("zh", t("language.zh"));
+      dd.setValue(this.plugin.store.data.settings.language).onChange((id: string) => {
+        this.plugin.store.setLanguage(id as Language);
+        this.display();
+      });
+    });
+
+    containerEl.createEl("h2", { text: t("settings.section.reset") });
+    new Setting(containerEl).addButton((btn) =>
+      btn.setButtonText(t("settings.reset")).onClick(() => {
+        if (window.confirm(t("settings.reset.confirm"))) {
+          this.plugin.store.resetSettings();
+          this.display();
+        }
+      }),
+    );
   }
 }

@@ -3,6 +3,13 @@ import type { PdfTextAnchorV1 } from "src/domain/pdf-text-anchor";
 
 export type MarkStyle = "highlight" | "underline";
 
+// User-dragged card position, in the same unscaled page-css space as anchor.geometry
+// (page-relative, zoom-stable). Absent on the record = auto-layout (push-down).
+export interface CardPositionV1 {
+  space: "page-css-v1";
+  y: number; // card top, page-relative, unscaled
+}
+
 export interface AnnotationRecordV1 {
   id: string;
   revision: number;
@@ -13,6 +20,7 @@ export interface AnnotationRecordV1 {
   colorValueSnapshot: string; // validated #RRGGBB
   comment?: string;
   anchor: PdfTextAnchorV1;
+  cardPosition?: CardPositionV1; // user-dragged position; absent = auto-layout
   createdAt: string; // ISO 8601
   updatedAt: string;
 }

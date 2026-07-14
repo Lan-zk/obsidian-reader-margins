@@ -8,7 +8,7 @@ function mkDoc(path: string, anns: AnnotationRecordV1[]): PluginDataV1 {
   for (const a of anns) map[a.id] = a;
   return {
     schemaVersion: 1, stateRevision: 0,
-    settings: { colors: [{ id: "y", name: "Y", value: "#fff15c" }], defaultColorId: "y" },
+    settings: { colors: [{ id: "y", name: "Y", value: "#fff15c" }], defaultColorId: "y", language: "auto" },
     documents: { [path]: { documentId: "d1", sourceSignature: { pdfFingerprint: "fp", numPages: 3 }, revision: 0, annotations: map } },
   };
 }

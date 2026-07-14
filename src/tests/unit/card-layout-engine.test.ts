@@ -46,4 +46,31 @@ describe("CardLayoutEngine", () => {
     });
     expect(out.visibleCardIds).toEqual(["a"]);
   });
+  it("pinned card stays at pinTop", () => {
+    const out = layoutCards({
+      pageHeight: 800, railScrollTop: 0, railViewportHeight: 800,
+      entries: [{ annotationId: "a", anchorY: 100, cardHeight: 40, pinTop: 300 }],
+    });
+    expect(out.mode).toBe("normal");
+    expect(out.positions.get("a")!.top).toBe(300);
+  });
+  it("unpinned card pushes past a pinned obstacle", () => {
+    const out = layoutCards({
+      pageHeight: 800, railScrollTop: 0, railViewportHeight: 800,
+      entries: [
+        { annotationId: "pin", anchorY: 100, cardHeight: 40, pinTop: 120 },
+        { annotationId: "free", anchorY: 110, cardHeight: 40 },
+      ],
+    });
+    expect(out.positions.get("pin")!.top).toBe(120);
+    // free's anchor (110) overlaps pin's [120,160] -> pushed to 160 + 8
+    expect(out.positions.get("free")!.top).toBe(168);
+  });
+  it("pinned card is clamped into the page", () => {
+    const out = layoutCards({
+      pageHeight: 200, railScrollTop: 0, railViewportHeight: 200,
+      entries: [{ annotationId: "a", anchorY: 0, cardHeight: 40, pinTop: 9999 }],
+    });
+    expect(out.positions.get("a")!.top).toBe(160); // 200 - 40
+  });
 });
