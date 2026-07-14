@@ -202,9 +202,28 @@ export class ViewerSession {
     // Clear only this page's marks (per-page, safe). Cards/connectors are deduped
     // per-annotation-id in their draw functions (shared rail/SVG across pages).
     clearMarks(pageEl);
+    // Reset rail overflows from previous dense pages (rails are shared, scoped per page).
+    for (const rail of container.querySelectorAll<HTMLElement>(".rm-card-rail")) {
+      rail.style.overflowY = "";
+      rail.style.maxHeight = "";
+    }
 
     const anns = this.store.byPage(this.pdfPath, pageNumber);
     if (anns.length === 0) return;
+
+    // Narrow window: hide cards/rails but keep marks per spec §5.4 (H-05).
+    // Use offsetWidth directly – getBoundingClientRect is unreliable in jsdom.
+    const marginPx = container.offsetWidth && pageEl.offsetWidth
+      ? (container.offsetWidth - pageEl.offsetWidth) / 2 - 16
+      : Infinity;
+    const narrow = marginPx < 136;
+    if (narrow) {
+      for (const ann of anns) {
+        const rects = cleanGeometry(ann.anchor.geometry.rects, ann.anchor.geometry.pageWidth, ann.anchor.geometry.pageHeight);
+        drawEphemeralMark(pageEl, rects, ann.colorValueSnapshot, ann.markStyle, scale);
+      }
+      return;
+    }
 
     const containerRect = container.getBoundingClientRect();
     const pageRect = pageEl.getBoundingClientRect();
@@ -271,13 +290,20 @@ export class ViewerSession {
         entries: group.map((g) => ({ annotationId: g.ann.id, anchorY: g.anchorY, cardHeight: g.card.offsetHeight || 40, pinTop: g.pinTop })),
       });
       const rail = container.querySelector<HTMLElement>(side === "left" ? ".rm-card-rail-left" : ".rm-card-rail-right");
+      // Dense mode: enable scrolling so cards don't overflow the page (H-05).
+      if (out.mode === "dense" && rail) {
+        rail.style.overflowY = "auto";
+        rail.style.maxHeight = `${pageHeight}px`;
+      }
       const railLeft = rail?.offsetLeft ?? 0;
+      const visibleSet = new Set(out.visibleCardIds);
       for (const g of group) {
         const pos = out.positions.get(g.ann.id);
         if (pos) g.card.style.top = `${offsetY + pos.top}px`;
+        // Skip connector for cards outside the visible viewport (H-05).
+        if (!visibleSet.has(g.ann.id)) continue;
         const cardHeight = g.card.offsetHeight || 40;
         const cardCenterY = offsetY + (pos?.top ?? g.anchorY) + cardHeight / 2;
-        // Connector ends at the card's page-facing edge (follows horizontal drag).
         const cardEdgeX = side === "left" ? railLeft + g.card.offsetLeft + g.card.offsetWidth : railLeft + g.card.offsetLeft;
         drawEphemeralConnector(container, { x1: g.markEdgeX, y1: g.markCenterY, x2: cardEdgeX, y2: cardCenterY, color: g.ann.colorValueSnapshot, id: g.ann.id, selected: this.hoveredId === g.ann.id });
       }
