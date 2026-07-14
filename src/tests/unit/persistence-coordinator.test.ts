@@ -40,4 +40,38 @@ describe("PersistenceCoordinator", () => {
     await flushP;
     expect(save).toHaveBeenCalledTimes(1);
   });
+  it("failure does not clobber a newer pending snapshot (C-01)", async () => {
+    let resolveSave: (ok: boolean) => void = () => {};
+    const save = vi.fn((_data: PluginDataV1) => new Promise<void>((res, rej) => {
+      resolveSave = (ok) => (ok ? res() : rej(new Error("disk")));
+    }));
+    const coord = new PersistenceCoordinator(save, { backoffMs: 5 });
+    const statuses: string[] = [];
+    coord.onStatus((s) => statuses.push(`${s.state}:${s.revision}`));
+
+    coord.enqueue({ ...makeDefaultData(), stateRevision: 1 }, 1);
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1)); // saving rev1
+    // While rev1 is in flight, enqueue rev2 (a newer full-state snapshot)
+    coord.enqueue({ ...makeDefaultData(), stateRevision: 2 }, 2);
+    // rev1 fails
+    resolveSave(false);
+    // After failure + backoff, rev2 (not rev1) must be the next save
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    resolveSave(true);
+    await vi.waitFor(() => expect(statuses).toContain("saved:2"));
+    // The last save must be rev2, not a stale rev1 retry
+    expect(save.mock.calls.at(-1)![0].stateRevision).toBe(2);
+  });
+  it("failure with no newer pending retries the failed snapshot", async () => {
+    const save = vi.fn()
+      .mockRejectedValueOnce(new Error("disk"))
+      .mockResolvedValueOnce(undefined);
+    const coord = new PersistenceCoordinator(save, { backoffMs: 5 });
+    const statuses: string[] = [];
+    coord.onStatus((s) => statuses.push(`${s.state}:${s.revision}`));
+    coord.enqueue({ ...makeDefaultData(), stateRevision: 5 }, 5);
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(statuses.at(-1)).toBe("saved:5");
+    expect(save.mock.calls.at(-1)![0].stateRevision).toBe(5);
+  });
 });

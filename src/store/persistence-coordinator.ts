@@ -57,7 +57,14 @@ export class PersistenceCoordinator {
           this.setStatus({ state: "failed", revision, message: String(err?.message ?? err) });
           const wait = this.backoffMs;
           this.backoffMs = Math.min(this.maxBackoffMs, this.backoffMs * 2);
-          this.pending = { data, revision };
+          // C-01: do not clobber a newer pending that arrived during save. The
+          // failed snapshot is superseded by the newer one (snapshots are full
+          // state), so only re-queue the failed snapshot when nothing newer is
+          // waiting. Otherwise the newer pending is saved next and the stale
+          // failure is discarded.
+          if (this.pending === null) {
+            this.pending = { data, revision };
+          }
           return new Promise<void>((res) => setTimeout(res, wait));
         }
       );
