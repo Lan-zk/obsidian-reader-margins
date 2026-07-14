@@ -115,8 +115,33 @@ export class ViewerSession {
     h.viewerEl.addEventListener("pointerup", onPointerUp);
     this.scope.addDispose(() => h.viewerEl.removeEventListener("pointerup", onPointerUp));
 
+    // Invalidate the cached selection when the user collapses or moves it (H-08).
+    // Without this a stale snapshot could create a "phantom annotation" when the
+    // user triggers the hotkey/toolbar after clicking elsewhere.
+    const onSelChange = () => {
+      if (!this.handles) return;
+      const win = this.handles.viewerEl.ownerDocument.defaultView;
+      if (!win) return;
+      const sel = win.getSelection();
+      if (!sel || sel.isCollapsed || !this.handles.viewerEl.contains(sel.anchorNode) || !this.handles.viewerEl.contains(sel.focusNode)) {
+        this.sel.clear();
+      }
+    };
+    const doc = h.viewerEl.ownerDocument;
+    doc.addEventListener("selectionchange", onSelChange);
+    this.scope.addDispose(() => doc.removeEventListener("selectionchange", onSelChange));
+
     // Click hit-test: clicking a mark flashes its linked card (spec §12.2).
-    const onClick = (e: MouseEvent) => this.onPageClick(e);
+    // Require < 4px movement to avoid processing drags / text selection gestures.
+    let clickStartX = 0; let clickStartY = 0;
+    const onPointerDown = (e: PointerEvent) => { clickStartX = e.clientX; clickStartY = e.clientY; };
+    h.viewerEl.addEventListener("pointerdown", onPointerDown);
+    this.scope.addDispose(() => h.viewerEl.removeEventListener("pointerdown", onPointerDown));
+    const onClick = (e: MouseEvent) => {
+      const dx = Math.abs(e.clientX - clickStartX);
+      const dy = Math.abs(e.clientY - clickStartY);
+      if (dx < 4 && dy < 4) this.onPageClick(e);
+    };
     h.viewerEl.addEventListener("click", onClick);
     this.scope.addDispose(() => h.viewerEl.removeEventListener("click", onClick));
 
