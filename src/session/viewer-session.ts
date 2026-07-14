@@ -13,8 +13,9 @@ import { buildCard, type CardCallbacks } from "src/render/annotation-card-rail";
 import { drawEphemeralConnector } from "src/render/connector-renderer";
 import { layoutCards } from "src/render/card-layout-engine";
 import { computeCardRailGeometry } from "src/render/card-drag-geometry";
-import { unionCenter, cleanGeometry } from "src/domain/pdf-text-anchor";
-import { captureAnchor } from "src/domain/anchor-resolver";
+import { unionCenter, cleanGeometry, normalizeQuote, type AnchorRect } from "src/domain/pdf-text-anchor";
+import { captureAnchor, resolveAnchor, type ResolveContext, type ResolveHit } from "src/domain/anchor-resolver";
+import { encodeLocator, decodeLocator } from "src/domain/locator-codec";
 import { ExportModal } from "src/export/export-modal";
 import { MarkdownExportService } from "src/export/markdown-export-service";
 import { hitTestAnnotation } from "src/render/page-projection";
@@ -218,9 +219,11 @@ export class ViewerSession {
     type Entry = { ann: AnnotationRecordV1; card: HTMLElement; anchorY: number; markCenterY: number; markEdgeX: number; pinTop?: number };
     const bySide: Record<"left" | "right", Entry[]> = { left: [], right: [] };
     for (const ann of anns) {
-      // Re-clean stored rects at render time so already-saved annotations also
-      // get vertical-overlap trimming (prevents double-tinted highlight divs).
-      const rects = cleanGeometry(ann.anchor.geometry.rects, ann.anchor.geometry.pageWidth, ann.anchor.geometry.pageHeight);
+      // Resolve the anchor against the live page (locator -> quote -> geometry).
+      // Unresolved annotations are not drawn (spec §9.6, H-03); remove any stale
+      // card/connector left from a previous render.
+      const rects = this.resolveAnnotation(ann, pageEl, scale);
+      if (!rects) { this.removeAnnotationDom(ann.id); continue; }
       drawEphemeralMark(pageEl, rects, ann.colorValueSnapshot, ann.markStyle, scale);
       const first = rects[0];
       const side: "left" | "right" = unionCenter(rects).x < ann.anchor.geometry.pageWidth / 2 ? "left" : "right";
@@ -301,7 +304,15 @@ export class ViewerSession {
     if (!pageEl) return { ok: false, reason: "page not found" };
     const scale = readCurrentScale(this.handles);
     const dims = { pageWidth: pageEl.offsetWidth / scale, pageHeight: pageEl.offsetHeight / scale, rotation: 0 as const };
-    const anchor = captureAnchor(snap, pageEl, scale, dims);
+    // Capture a text-layer locator + quote context so the anchor can be resolved
+    // (not just re-painted) on reopen/reflow (H-03). locator is best-effort: if
+    // the selection does not land on tracked text items, it is omitted.
+    const textLayer = pageEl.querySelector<HTMLElement>(".textLayer");
+    const locator = textLayer
+      ? (encodeLocator(snap.range.startContainer, snap.range.startOffset, snap.range.endContainer, snap.range.endOffset, textLayer) ?? undefined)
+      : undefined;
+    const ctx = { locator, ...this.extractQuoteContext(textLayer, normalizeQuote(snap.selectedText)) };
+    const anchor = captureAnchor(snap, pageEl, scale, dims, ctx);
     if (!anchor) return { ok: false, reason: "anchor capture failed" };
     const colors = this.store.data.settings.colors;
     const id = colorId ?? this.store.data.settings.defaultColorId;
@@ -485,6 +496,83 @@ export class ViewerSession {
   // Public translator accessor for command/palette notices.
   tNotice(key: string, vars?: Record<string, string>): string {
     return (this.t ?? makeT("auto", "en"))(key, vars);
+  }
+
+  // Extract up to 16 chars of context around the quote in the page text layer,
+  // to disambiguate repeated quotes on resolve (spec §9.5).
+  private extractQuoteContext(textLayer: HTMLElement | null, exact: string): { prefix?: string; suffix?: string } {
+    if (!textLayer) return {};
+    const full = normalizeQuote(textLayer.textContent ?? "");
+    const idx = full.indexOf(exact);
+    if (idx < 0) return {};
+    const prefix = idx > 0 ? full.slice(Math.max(0, idx - 16), idx) : undefined;
+    const suffixEnd = idx + exact.length;
+    const suffix = suffixEnd < full.length ? full.slice(suffixEnd, suffixEnd + 16) : undefined;
+    return { prefix: prefix || undefined, suffix: suffix || undefined };
+  }
+
+  // Resolve an annotation's anchor against the live page. Returns the rects to
+  // draw, or null when unresolved (caller skips drawing - spec §9.6, H-03).
+  private resolveAnnotation(ann: AnnotationRecordV1, pageEl: HTMLElement, scale: number): AnchorRect[] | null {
+    const dims = { pageWidth: pageEl.offsetWidth / scale, pageHeight: pageEl.offsetHeight / scale, rotation: 0 as const };
+    const textLayer = pageEl.querySelector<HTMLElement>(".textLayer");
+    const ctx: ResolveContext = {
+      findRangeByLocator: (loc) => {
+        if (!textLayer || !loc) return null;
+        const range = decodeLocator(loc, textLayer);
+        if (!range) return null;
+        return this.rangeToHit(range, pageEl, scale, dims);
+      },
+      searchPageText: (exact) => {
+        if (!textLayer) return null;
+        const range = this.findTextRange(textLayer, exact);
+        if (!range) return null;
+        return this.rangeToHit(range, pageEl, scale, dims);
+      },
+      pageDims: dims,
+    };
+    const result = resolveAnchor(ann.anchor, ctx);
+    if (result.status === "unresolved") return null;
+    return result.rects;
+  }
+
+  private rangeToHit(range: Range, pageEl: HTMLElement, scale: number, dims: { pageWidth: number; pageHeight: number }): ResolveHit | null {
+    const pageRect = pageEl.getBoundingClientRect();
+    const raw: AnchorRect[] = [];
+    const rects = range.getClientRects();
+    for (let i = 0; i < rects.length; i++) {
+      const c = rects[i];
+      raw.push({ x: (c.left - pageRect.left) / scale, y: (c.top - pageRect.top) / scale, width: c.width / scale, height: c.height / scale });
+    }
+    const cleaned = cleanGeometry(raw, dims.pageWidth, dims.pageHeight);
+    return cleaned.length > 0 ? { range, rects: cleaned } : null;
+  }
+
+  // Find the first occurrence of `exact` in the text layer and build a Range.
+  private findTextRange(textLayer: HTMLElement, exact: string): Range | null {
+    const doc = textLayer.ownerDocument;
+    const walker = doc.createTreeWalker(textLayer, NodeFilter.SHOW_TEXT);
+    const chunks: { node: Text; start: number }[] = [];
+    let full = "";
+    let n: Node | null;
+    while ((n = walker.nextNode())) {
+      chunks.push({ node: n as Text, start: full.length });
+      full += n.textContent ?? "";
+    }
+    const idx = full.indexOf(exact);
+    if (idx < 0) return null;
+    const end = idx + exact.length;
+    let startNode: Text | null = null, startOffset = 0, endNode: Text | null = null, endOffset = 0;
+    for (const c of chunks) {
+      const cEnd = c.start + (c.node.textContent?.length ?? 0);
+      if (!startNode && cEnd > idx) { startNode = c.node; startOffset = idx - c.start; }
+      if (cEnd >= end) { endNode = c.node; endOffset = end - c.start; break; }
+    }
+    if (!startNode || !endNode) return null;
+    const range = doc.createRange();
+    range.setStart(startNode, Math.max(0, startOffset));
+    range.setEnd(endNode, Math.max(0, endOffset));
+    return range;
   }
 
   private reconcileAllVisiblePages(): void {

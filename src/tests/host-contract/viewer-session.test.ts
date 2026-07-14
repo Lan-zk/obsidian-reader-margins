@@ -176,6 +176,26 @@ describe("ViewerSession (M-1)", () => {
     expect(store.byId("test.pdf", created.annotation.id)?.cardPosition?.x).toBe(42);
     session.dispose();
   });
+  it("does not render an annotation whose anchor cannot be resolved (H-03)", async () => {
+    const { view, pages } = buildHostFixture({ fingerprint: "fp-a", numPages: 1, marginWidthPx: 200 });
+    // Page dims no longer match the stored geometry -> geometry fallback fails;
+    // no locator/quote either -> unresolved.
+    Object.defineProperty(pages[0].el, "offsetWidth", { value: 300, configurable: true });
+    const store = makeStore();
+    const anchor = {
+      kind: "pdf-text" as const, version: 1 as const, pageNumber: 1,
+      quote: { exact: "hi", normalization: "collapse-whitespace-v1" as const },
+      geometry: { space: "page-css-v1" as const, pageWidth: 600, pageHeight: 800, rotation: 0 as const, rects: [{ x: 10, y: 10, width: 50, height: 14 }] },
+    };
+    store.create("test.pdf", { markStyle: "highlight", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c", anchor }, { pdfFingerprint: "fp-a", numPages: 1 });
+    const session = new ViewerSession(view as any, "test.pdf", store);
+    await session.attach();
+    const nextFrame = () => new Promise<void>((r) => setTimeout(r, 20));
+    session.reconcilePage(1);
+    await nextFrame();
+    expect(pages[0].el.querySelector(".rm-mark")).toBeNull();
+    session.dispose();
+  });
   it("enters degraded when eventBus is missing (fail closed, H-07)", async () => {
     const { view } = buildHostFixture({ numPages: 1, marginWidthPx: 200 });
     delete (view as any).viewer.child.pdfViewer.eventBus;

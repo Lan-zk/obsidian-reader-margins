@@ -15,18 +15,19 @@ function anchor(opts: Partial<PdfTextAnchorV1> = {}): PdfTextAnchorV1 {
 }
 
 describe("resolveAnchor precedence", () => {
-  it("resolves via locator when locator yields matching quote", () => {
+  it("resolves via locator when locator yields matching quote, returning fresh rects", () => {
     const ctx = {
-      findRangeByLocator: () => ({ toString: () => "hello" }) as Range,
+      findRangeByLocator: () => ({ range: { toString: () => "hello" } as Range, rects: [{ x: 5, y: 20, width: 40, height: 12 }] }),
       searchPageText: () => null, pageDims: { pageWidth: 600, pageHeight: 800, rotation: 0 as const },
     };
     const r = resolveAnchor(anchor({ locator: { beginIndex: 0, beginOffset: 0, endIndex: 0, endOffset: 5 } }), ctx);
     expectResolved(r);
     expect(r.method).toBe("locator");
+    expect(r.rects).toEqual([{ x: 5, y: 20, width: 40, height: 12 }]); // not the stored geometry
   });
   it("falls back to quote search when locator quote mismatches", () => {
     const ctx = {
-      findRangeByLocator: () => ({ toString: () => "WRONG" }) as Range,
+      findRangeByLocator: () => ({ range: { toString: () => "WRONG" } as Range, rects: [{ x: 0, y: 0, width: 1, height: 1 }] }),
       searchPageText: () => ({ range: {} as Range, rects: [{ x: 5, y: 20, width: 40, height: 12 }] }),
       pageDims: { pageWidth: 600, pageHeight: 800, rotation: 0 as const },
     };

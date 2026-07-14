@@ -37,6 +37,10 @@ export function buildHostFixture(opts: HostFixtureOptions = {}) {
     const page = document.createElement("div");
     page.className = "page";
     page.dataset.pageNumber = String(i);
+    // jsdom reports 0 for offset geometry; give the page a real size so render/
+    // resolve paths that read offsetWidth/Height behave like a real layout.
+    Object.defineProperty(page, "offsetWidth", { value: 600, configurable: true });
+    Object.defineProperty(page, "offsetHeight", { value: 800, configurable: true });
     const textLayer = document.createElement("div");
     textLayer.className = "textLayer";
     page.appendChild(textLayer);

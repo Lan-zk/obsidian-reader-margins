@@ -35,9 +35,11 @@ export type AnchorResolveResult =
   | { status: "resolved"; rects: AnchorRect[]; method: "locator" | "quote" | "geometry" }
   | { status: "unresolved"; reason: string };
 
+export interface ResolveHit { range: Range; rects: AnchorRect[]; }
+
 export interface ResolveContext {
-  findRangeByLocator: (locator: PdfTextAnchorV1["locator"]) => Range | null;
-  searchPageText: (exact: string, prefix: string | undefined, suffix: string | undefined) => { range: Range; rects: AnchorRect[] } | null;
+  findRangeByLocator: (locator: PdfTextAnchorV1["locator"]) => ResolveHit | null;
+  searchPageText: (exact: string, prefix: string | undefined, suffix: string | undefined) => ResolveHit | null;
   pageDims: PageDims;
 }
 
@@ -48,9 +50,11 @@ export function resolveAnchor(anchor: PdfTextAnchorV1, ctx: ResolveContext): Anc
   const exact = anchor.quote.exact;
 
   if (anchor.locator) {
-    const range = ctx.findRangeByLocator(anchor.locator);
-    if (range && normalizeQuote(range.toString()) === exact) {
-      return { status: "resolved", rects: anchor.geometry.rects, method: "locator" };
+    const hit = ctx.findRangeByLocator(anchor.locator);
+    // locator success must return the freshly computed rects (tracking text
+    // reflow), not the stale stored geometry (H-03).
+    if (hit && normalizeQuote(hit.range.toString()) === exact) {
+      return { status: "resolved", rects: hit.rects, method: "locator" };
     }
   }
   const hit = ctx.searchPageText(exact, anchor.quote.prefix, anchor.quote.suffix);
