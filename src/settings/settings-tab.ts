@@ -25,16 +25,6 @@ export class ReaderMarginsSettingsTab extends PluginSettingTab {
     const t = this.t();
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: t("settings.section.reset") });
-    new Setting(containerEl).addButton((btn) =>
-      btn.setButtonText(t("settings.reset")).onClick(() => {
-        if (window.confirm(t("settings.reset.confirm"))) {
-          this.plugin.store.resetSettings();
-          this.display();
-        }
-      }),
-    );
-
     containerEl.createEl("h2", { text: t("settings.section.language") });
     new Setting(containerEl).addDropdown((dd) => {
       dd.addOption("auto", t("language.auto"));
@@ -51,16 +41,18 @@ export class ReaderMarginsSettingsTab extends PluginSettingTab {
     const defaultId = this.plugin.store.data.settings.defaultColorId;
     new Setting(containerEl).addDropdown((dd) => {
       for (const c of colors) dd.addOption(c.id, c.name);
-      dd.setValue(defaultId).onChange((id: string) => {
+      dd.setValue(defaultId).onChange((id) => {
         this.plugin.store.setDefaultColor(id);
         this.display();
       });
     });
 
     containerEl.createEl("h2", { text: t("settings.section.colors") });
-    for (const c of colors) {
+    colors.forEach((c, i) => {
+      // Unique row labels ("Color 1", "Color 2"…) - a repeated "Color" name on
+      // every row made the section unreadable in scan (critique P2).
       const setting = new Setting(containerEl)
-        .setName(t("color.label"))
+        .setName(`${t("color.label")} ${i + 1}`)
         .addText((text) =>
           text.setValue(c.name).onChange((v) => { c.name = v; }),
         )
@@ -84,7 +76,7 @@ export class ReaderMarginsSettingsTab extends PluginSettingTab {
         const result = this.plugin.store.commitSettings();
         if (!result.ok) new Notice(result.reason, 4000);
       });
-    }
+    });
 
     new Setting(containerEl).addButton((btn) => {
       btn.setButtonText(t("color.add")).onClick(() => {
@@ -93,5 +85,16 @@ export class ReaderMarginsSettingsTab extends PluginSettingTab {
       });
       if (colors.length >= MAX_COLORS) btn.setDisabled(true).setTooltip(t("color.cannotAdd"));
     });
+
+    // Destructive action lives at the bottom, styled as a warning (critique P2).
+    containerEl.createEl("h2", { text: t("settings.section.reset") });
+    new Setting(containerEl).addButton((btn) =>
+      btn.setButtonText(t("settings.reset")).setWarning().onClick(() => {
+        if (window.confirm(t("settings.reset.confirm"))) {
+          this.plugin.store.resetSettings();
+          this.display();
+        }
+      }),
+    );
   }
 }

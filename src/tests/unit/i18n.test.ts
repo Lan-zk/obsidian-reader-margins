@@ -23,4 +23,18 @@ describe("i18n", () => {
     expect(makeT("en", "en")("toolbar.highlight", { label: "Yellow" })).toBe("Highlight: Yellow");
     expect(makeT("zh", "en")("toolbar.highlight", { label: "黄色" })).toBe("高亮：黄色");
   });
+  it("translates persistence states", () => {
+    const t = makeT("zh", "zh");
+    expect(t("persistence.dirty")).toBe("有未保存的更改");
+    expect(t("persistence.saving")).toBe("正在保存…");
+    expect(t("persistence.failed", { message: "disk full" })).toBe("保存失败：disk full。正在重试。");
+  });
+  it("localizes rename failures without exposing store reason codes", () => {
+    const en = makeT("en", "en");
+    const zh = makeT("zh", "zh");
+    expect(en("notice.rename.readonly")).toBe("Cannot update annotation paths because Reader Margins data is read-only.");
+    expect(en("notice.rename.conflict")).toBe("Cannot move annotations because the destination already has annotation data.");
+    expect(zh("notice.rename.readonly")).toBe("无法更新批注路径：Reader Margins 数据当前为只读。");
+    expect(zh("notice.rename.conflict")).toBe("无法移动批注：目标路径已有批注数据。");
+  });
 });

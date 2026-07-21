@@ -1,7 +1,7 @@
 // src/store/plugin-data-schema.ts
 import { DEFAULT_COLORS, DEFAULT_COLOR_ID, validateHexColor, normalizeColors, type ColorConfigV1 } from "src/domain/colors";
 import { DEFAULT_LANGUAGE, isLanguage, type Language } from "src/i18n";
-import type { AnnotationRecordV1 } from "src/domain/annotation";
+import type { AnnotationRecordV1, CardPositionV1 } from "src/domain/annotation";
 import type { AnchorRect } from "src/domain/pdf-text-anchor";
 
 export interface PluginSettingsV1 {
@@ -79,6 +79,25 @@ function isFiniteNum(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
 }
 
+function ownDataValue(raw: Record<string, unknown>, key: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(raw, key);
+  return descriptor && "value" in descriptor ? descriptor.value : undefined;
+}
+
+export function sanitizeCardPosition(raw: unknown, pageHeight: number): CardPositionV1 | null {
+  if (!isObj(raw) || Object.getPrototypeOf(raw) !== Object.prototype) return null;
+  const space = ownDataValue(raw, "space");
+  const y = ownDataValue(raw, "y");
+  const x = ownDataValue(raw, "x");
+  if (space !== "page-css-v1" || !isFiniteNum(y)) return null;
+  if (x !== undefined && (!isFiniteNum(x) || x < 0)) return null;
+  return {
+    space: "page-css-v1",
+    y: Math.max(0, Math.min(y, pageHeight)),
+    ...(x !== undefined ? { x } : {}),
+  };
+}
+
 function sanitizeAnnotation(raw: unknown): AnnotationRecordV1 | null {
   if (!isObj(raw)) return null;
   const a = raw;
@@ -112,6 +131,13 @@ function sanitizeAnnotation(raw: unknown): AnnotationRecordV1 | null {
   }
   if (rects.length === 0) return null;
 
+  let cardPosition: CardPositionV1 | undefined;
+  if (a.cardPosition !== undefined) {
+    const sanitized = sanitizeCardPosition(a.cardPosition, geometry.pageHeight);
+    if (!sanitized) return null;
+    cardPosition = sanitized;
+  }
+
   const locator = isObj(anchor.locator)
     ? {
         beginIndex: Number(anchor.locator.beginIndex),
@@ -130,6 +156,7 @@ function sanitizeAnnotation(raw: unknown): AnnotationRecordV1 | null {
     colorLabelSnapshot: a.colorLabelSnapshot,
     colorValueSnapshot: a.colorValueSnapshot,
     comment: typeof a.comment === "string" ? a.comment : undefined,
+    cardPosition,
     anchor: {
       kind: "pdf-text",
       version: 1,

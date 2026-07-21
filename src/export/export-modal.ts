@@ -16,6 +16,7 @@ export class ExportModal extends Modal {
     private meta: { documentId: string; documentRevision: number },
     private service: MarkdownExportService,
     private t: Translate,
+    private onSuccess?: () => void,
   ) {
     super(app);
     // Start with a plain default; onOpen upgrades to a unique path.
@@ -96,6 +97,7 @@ export class ExportModal extends Modal {
     this.busy = false;
     if (result.ok) {
       new Notice(this.t(replace ? "modal.exportedReplace" : "modal.exported", { count: String(this.annotations.length) }));
+      this.onSuccess?.();
       this.close();
       return;
     }

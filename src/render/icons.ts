@@ -25,6 +25,10 @@ const ICONS: Record<string, IconDef> = {
   },
   // lucide underline
   underline: { paths: ["M6 4v6a6 6 0 0 0 12 0V4", "M4 20h16"] },
+  // lucide highlighter
+  highlighter: {
+    paths: ["m9 11-6 6v3h9l3-3", "m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4Z"],
+  },
   // lucide download
   download: { paths: ["M12 15V3", "M7 10l5 5 5-5", "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"] },
   // lucide grip-vertical (filled dots)

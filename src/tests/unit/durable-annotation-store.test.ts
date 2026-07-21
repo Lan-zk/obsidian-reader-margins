@@ -47,6 +47,20 @@ describe("DurableAnnotationStore", () => {
     expect(res.ok).toBe(false);
     expect((res as any).reason).toMatch(/signature/i);
   });
+  it("labels create, update, and restore changes so projections do not infer intent from DOM", () => {
+    const s = new DurableAnnotationStore(async () => {});
+    s.loadAndValidate(null);
+    const kinds: Array<string | undefined> = [];
+    s.onChange((_path, changes) => kinds.push(...changes.map((change) => change.kind)));
+    const created = s.create("a.pdf", input(), SIG);
+    if (!created.ok) throw new Error(created.reason);
+    s.update("a.pdf", created.annotation.id, { comment: "updated" }, created.annotation.revision);
+    const tombstone = structuredClone(s.byId("a.pdf", created.annotation.id)!);
+    const docId = s.data.documents["a.pdf"].documentId;
+    s.delete("a.pdf", created.annotation.id);
+    s.restore("a.pdf", tombstone, docId, SIG);
+    expect(kinds).toEqual(["created", "updated", "deleted", "restored"]);
+  });
   it("upgrades a legacy unknown fingerprint only when the verified PDF has the same page count", async () => {
     const save = vi.fn(async (_data: any) => {});
     const s = new DurableAnnotationStore(save);
@@ -76,6 +90,76 @@ describe("DurableAnnotationStore", () => {
     expect(ok.ok).toBe(true);
     const stale = s.update("a.pdf", res.annotation.id, { comment: "stale" }, res.annotation.revision);
     expect(stale.ok).toBe(false);
+  });
+  it.each([
+    ["non-finite y", { space: "page-css-v1", y: Number.NaN, x: 10 }],
+    ["non-finite x", { space: "page-css-v1", y: 10, x: Number.POSITIVE_INFINITY }],
+    ["unknown space", { space: "viewport-v1", y: 10, x: 10 }],
+    ["negative container x", { space: "page-css-v1", y: 10, x: -1 }],
+    ["null payload", null],
+  ])("rejects a card-position update with %s without mutation or persistence", async (_label, cardPosition) => {
+    const save = vi.fn(async () => {});
+    const s = new DurableAnnotationStore(save);
+    s.loadAndValidate(null);
+    const created = s.create("a.pdf", input(), SIG);
+    if (!created.ok) throw new Error(created.reason);
+    await s.flushBestEffort();
+    save.mockClear();
+    const changes = vi.fn();
+    s.onChange(changes);
+    const before = {
+      stateRevision: s.data.stateRevision,
+      documentRevision: s.data.documents["a.pdf"].revision,
+      annotation: structuredClone(s.byId("a.pdf", created.annotation.id)),
+    };
+
+    const result = s.update("a.pdf", created.annotation.id, { cardPosition: cardPosition as any }, created.annotation.revision);
+    await s.flushBestEffort();
+
+    expect(result).toMatchObject({ ok: false, reason: expect.stringMatching(/position/i) });
+    expect(s.data.stateRevision).toBe(before.stateRevision);
+    expect(s.data.documents["a.pdf"].revision).toBe(before.documentRevision);
+    expect(s.byId("a.pdf", created.annotation.id)).toEqual(before.annotation);
+    expect(changes).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+  it("normalizes durable y to page bounds without viewport-clamping durable x", () => {
+    const s = new DurableAnnotationStore(async () => {});
+    s.loadAndValidate(null);
+    const created = s.create("a.pdf", input(), SIG);
+    if (!created.ok) throw new Error(created.reason);
+
+    const below = s.update("a.pdf", created.annotation.id,
+      { cardPosition: { space: "page-css-v1", y: -10, x: 100_000 } }, created.annotation.revision);
+    if (!below.ok) throw new Error(below.reason);
+    expect(below.annotation.cardPosition).toEqual({ space: "page-css-v1", y: 0, x: 100_000 });
+
+    const above = s.update("a.pdf", created.annotation.id,
+      { cardPosition: { space: "page-css-v1", y: 900, x: 100_000 } }, below.annotation.revision);
+    if (!above.ok) throw new Error(above.reason);
+    expect(above.annotation.cardPosition).toEqual({ space: "page-css-v1", y: 800, x: 100_000 });
+  });
+  it("keeps read-only and revision-conflict failures ahead of card-position validation", async () => {
+    const save = vi.fn(async () => {});
+    const s = new DurableAnnotationStore(save);
+    s.loadAndValidate(null);
+    const created = s.create("a.pdf", input(), SIG);
+    if (!created.ok) throw new Error(created.reason);
+    const advanced = s.update("a.pdf", created.annotation.id, { comment: "advanced" }, created.annotation.revision);
+    if (!advanced.ok) throw new Error(advanced.reason);
+    await s.flushBestEffort();
+    save.mockClear();
+
+    const conflict = s.update("a.pdf", created.annotation.id,
+      { cardPosition: { space: "viewport-v1", y: Number.NaN } as any }, created.annotation.revision);
+    expect(conflict).toMatchObject({ ok: false, reason: expect.stringMatching(/revision conflict/i) });
+
+    s.isReadonly = true;
+    const readonly = s.update("a.pdf", created.annotation.id,
+      { cardPosition: { space: "viewport-v1", y: Number.NaN } as any }, advanced.annotation.revision);
+    expect(readonly).toMatchObject({ ok: false, reason: expect.stringMatching(/read-only/i) });
+    await s.flushBestEffort();
+    expect(save).not.toHaveBeenCalled();
   });
   it("delete removes and emits change", () => {
     const save = vi.fn(async () => {});
@@ -140,5 +224,154 @@ describe("DurableAnnotationStore", () => {
     expect(r.ok).toBe(true);
     expect(r.annotation.id).toBe(annId); // same id, not a new UUID
     expect(s.data.documents["a.pdf"].documentId).toBe(docId); // document identity preserved
+  });
+
+  it("transactionally rekeys one PDF with one immutable persisted snapshot", async () => {
+    const save = vi.fn(async (_data: any) => {});
+    const s = new DurableAnnotationStore(save);
+    s.loadAndValidate(null);
+    const created = s.create("old.pdf", input(2, 240), SIG);
+    if (!created.ok) throw new Error(created.reason);
+    await s.flushBestEffort();
+    save.mockClear();
+
+    const before = structuredClone(s.data.documents["old.pdf"]);
+    const changes = vi.fn();
+    s.onChange(changes);
+    const stateRevision = s.data.stateRevision;
+
+    const result = s.rekeyDocumentPaths([{ oldPath: "old.pdf", newPath: "archive/new.pdf" }]);
+
+    expect(result).toEqual({ ok: true, moved: 1 });
+    expect(s.data.stateRevision).toBe(stateRevision + 1);
+    expect(s.data.documents["old.pdf"]).toBeUndefined();
+    expect(s.data.documents["archive/new.pdf"]).toEqual({ ...before, revision: before.revision + 1 });
+    expect(s.data.documents["archive/new.pdf"].documentId).toBe(before.documentId);
+    expect(s.data.documents["archive/new.pdf"].sourceSignature).toEqual(before.sourceSignature);
+    expect(s.data.documents["archive/new.pdf"].annotations).toEqual(before.annotations);
+    expect(s.byId("archive/new.pdf", created.annotation.id)).toEqual(created.annotation);
+    expect(s.byPath("old.pdf")).toEqual([]);
+    expect(changes).toHaveBeenCalledTimes(1);
+    expect(changes).toHaveBeenCalledWith("documents", [], {
+      documentMoves: [{ oldPath: "old.pdf", newPath: "archive/new.pdf" }],
+    });
+
+    expect(save).toHaveBeenCalledTimes(1);
+    const persisted = save.mock.calls[0][0];
+    s.data.documents["archive/new.pdf"].sourceSignature.pdfFingerprint = "live-mutation";
+    expect(persisted.documents["archive/new.pdf"].sourceSignature.pdfFingerprint).toBe("fp");
+    await s.flushBestEffort();
+
+    const reloaded = new DurableAnnotationStore(async () => {});
+    expect(reloaded.loadAndValidate(persisted)).toBe("valid");
+    expect(reloaded.data.documents["archive/new.pdf"]).toEqual({ ...before, revision: before.revision + 1 });
+    expect(reloaded.byId("archive/new.pdf", created.annotation.id)).toEqual(created.annotation);
+  });
+
+  it("rekeys a folder-prefix batch with one global revision and one revision per moved document", async () => {
+    const save = vi.fn(async (_data: any) => {});
+    const s = new DurableAnnotationStore(save);
+    s.loadAndValidate(null);
+    const first = s.create("old/a.pdf", input(1), SIG);
+    await s.flushBestEffort();
+    const second = s.create("old/nested/b.pdf", input(3), { pdfFingerprint: "fp-b", numPages: 3 });
+    if (!first.ok) throw new Error(first.reason);
+    if (!second.ok) throw new Error(second.reason);
+    await s.flushBestEffort();
+    save.mockClear();
+    const beforeStateRevision = s.data.stateRevision;
+    const beforeA = structuredClone(s.data.documents["old/a.pdf"]);
+    const beforeB = structuredClone(s.data.documents["old/nested/b.pdf"]);
+
+    const result = s.rekeyDocumentPaths([
+      { oldPath: "old/a.pdf", newPath: "renamed/a.pdf" },
+      { oldPath: "old/nested/b.pdf", newPath: "renamed/nested/b.pdf" },
+    ]);
+
+    expect(result).toEqual({ ok: true, moved: 2 });
+    expect(s.data.stateRevision).toBe(beforeStateRevision + 1);
+    expect(s.data.documents["renamed/a.pdf"]).toEqual({ ...beforeA, revision: beforeA.revision + 1 });
+    expect(s.data.documents["renamed/nested/b.pdf"]).toEqual({ ...beforeB, revision: beforeB.revision + 1 });
+    expect(s.byId("renamed/a.pdf", first.annotation.id)).toEqual(first.annotation);
+    expect(s.byId("renamed/nested/b.pdf", second.annotation.id)).toEqual(second.annotation);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an annotation-free rename and replay of an applied rename as no-ops", async () => {
+    const save = vi.fn(async (_data: any) => {});
+    const s = new DurableAnnotationStore(save);
+    s.loadAndValidate(null);
+    const changes = vi.fn();
+    s.onChange(changes);
+
+    expect(s.rekeyDocumentPaths([{ oldPath: "empty.pdf", newPath: "renamed.pdf" }])).toEqual({ ok: true, moved: 0 });
+    expect(s.data.stateRevision).toBe(0);
+    expect(changes).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+
+    const created = s.create("old.pdf", input(), SIG);
+    if (!created.ok) throw new Error(created.reason);
+    await s.flushBestEffort();
+    save.mockClear();
+    changes.mockClear();
+    expect(s.rekeyDocumentPaths([{ oldPath: "old.pdf", newPath: "new.pdf" }])).toEqual({ ok: true, moved: 1 });
+    await s.flushBestEffort();
+    save.mockClear();
+    changes.mockClear();
+    const revision = s.data.stateRevision;
+
+    expect(s.rekeyDocumentPaths([{ oldPath: "old.pdf", newPath: "new.pdf" }])).toEqual({ ok: true, moved: 0 });
+    expect(s.data.stateRevision).toBe(revision);
+    expect(s.byId("new.pdf", created.annotation.id)).toEqual(created.annotation);
+    expect(changes).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("rejects rekeying in read-only mode without changing either path", async () => {
+    const save = vi.fn(async (_data: any) => {});
+    const s = new DurableAnnotationStore(save);
+    s.loadAndValidate(null);
+    const created = s.create("old.pdf", input(), SIG);
+    if (!created.ok) throw new Error(created.reason);
+    await s.flushBestEffort();
+    save.mockClear();
+    const before = structuredClone(s.data);
+    const changes = vi.fn();
+    s.onChange(changes);
+    s.isReadonly = true;
+
+    expect(s.rekeyDocumentPaths([{ oldPath: "old.pdf", newPath: "new.pdf" }])).toEqual({
+      ok: false,
+      reason: "readonly",
+    });
+    expect(s.data).toEqual(before);
+    expect(changes).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("rejects a destination collision atomically and preserves both documents", async () => {
+    const save = vi.fn(async (_data: any) => {});
+    const s = new DurableAnnotationStore(save);
+    s.loadAndValidate(null);
+    const source = s.create("source.pdf", input(), SIG);
+    await s.flushBestEffort();
+    const destination = s.create("destination.pdf", input(2), { pdfFingerprint: "destination-fp", numPages: 3 });
+    if (!source.ok) throw new Error(source.reason);
+    if (!destination.ok) throw new Error(destination.reason);
+    await s.flushBestEffort();
+    save.mockClear();
+    const before = structuredClone(s.data);
+    const changes = vi.fn();
+    s.onChange(changes);
+
+    expect(s.rekeyDocumentPaths([{ oldPath: "source.pdf", newPath: "destination.pdf" }])).toEqual({
+      ok: false,
+      reason: "destination-conflict",
+    });
+    expect(s.data).toEqual(before);
+    expect(s.byId("source.pdf", source.annotation.id)).toEqual(source.annotation);
+    expect(s.byId("destination.pdf", destination.annotation.id)).toEqual(destination.annotation);
+    expect(changes).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
   });
 });

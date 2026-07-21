@@ -11,6 +11,7 @@ export interface LayoutOutput {
   mode: "normal" | "dense";
   positions: Map<string, CardPosition>;
   visibleCardIds: string[];
+  contentHeight: number;
 }
 
 const GAP_PX = 8;
@@ -62,27 +63,16 @@ export function layoutCards(input: LayoutInput): LayoutOutput {
   const dense = requiredHeight > input.pageHeight || crossesPageBoundary;
 
   if (!dense) {
-    return { mode: "normal", positions, visibleCardIds: entries.map((e) => e.annotationId) };
+    return { mode: "normal", positions, visibleCardIds: entries.map((e) => e.annotationId), contentHeight: input.pageHeight };
   }
-
-  const clamped = new Map<string, CardPosition>();
-  occupied.length = 0;
-  for (const e of entries.filter((entry) => entry.pinTop != null)) {
-    const top = clampTop(e, e.pinTop!);
-    clamped.set(e.annotationId, { top });
-    addOccupied(top, e.cardHeight);
-  }
-  for (const e of entries.filter((entry) => entry.pinTop == null)) {
-    const natural = positions.get(e.annotationId)?.top ?? e.anchorY;
-    const top = avoidOccupied(e, natural, true);
-    clamped.set(e.annotationId, { top });
-    addOccupied(top, e.cardHeight);
-  }
-
+  // Dense mode keeps the normal page-local positions in scroll content. Clamping
+  // every card to the page bottom makes later cards overlap and unreachable.
+  const contentHeight = Math.max(input.pageHeight, ...entries.map((entry) =>
+    (positions.get(entry.annotationId)?.top ?? 0) + entry.cardHeight));
   const lo = input.railScrollTop, hi = input.railScrollTop + input.railViewportHeight;
   const visible = entries.filter((e) => {
-    const p = clamped.get(e.annotationId)!;
+    const p = positions.get(e.annotationId)!;
     return p.top + e.cardHeight >= lo && p.top <= hi;
   }).map((e) => e.annotationId);
-  return { mode: "dense", positions: clamped, visibleCardIds: visible };
+  return { mode: "dense", positions, visibleCardIds: visible, contentHeight };
 }

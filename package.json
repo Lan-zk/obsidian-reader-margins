@@ -8,7 +8,8 @@
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs --production",
     "test": "vitest run --passWithNoTests",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify": "npm test && npm run build && git diff --check && git diff --cached --check"
   },
   "devDependencies": {
     "builtin-modules": "^3.3.0",

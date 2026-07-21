@@ -1,13 +1,19 @@
 // src/store/durable-annotation-store.ts
-import { parsePluginData, makeDefaultData, snapshotData, type PluginDataV1, type DataLoadState } from "src/store/plugin-data-schema";
+import { parsePluginData, makeDefaultData, sanitizeCardPosition, type PluginDataV1, type DataLoadState } from "src/store/plugin-data-schema";
 import { AnnotationIndexes } from "src/store/indexes";
 import { PersistenceCoordinator, type PersistenceStatus } from "src/store/persistence-coordinator";
 import type { AnnotationRecordV1, CreateAnnotationInput, MutationResult, DocumentSignature } from "src/domain/annotation";
 import { normalizeColors, canDeleteColor, validateSettingsMutation, MAX_COLORS, DEFAULT_COLORS, DEFAULT_COLOR_ID } from "src/domain/colors";
 import { isLanguage, DEFAULT_LANGUAGE, type Language } from "src/i18n";
 
-export interface ChangeEntry { id: string; page?: number; deleted?: boolean; }
-export type ChangeEvent = (pdfPath: string, changes: ChangeEntry[]) => void;
+export type ChangeKind = "created" | "updated" | "deleted" | "restored";
+export interface ChangeEntry { id: string; page?: number; deleted?: boolean; kind?: ChangeKind; }
+export interface DocumentPathMove { oldPath: string; newPath: string; }
+export interface StoreChangePayload { documentMoves?: DocumentPathMove[]; }
+export type ChangeEvent = (pdfPath: string, changes: ChangeEntry[], payload?: StoreChangePayload) => void;
+export type RekeyDocumentPathsResult =
+  | { ok: true; moved: number }
+  | { ok: false; reason: "destination-conflict" | "readonly" };
 
 const LIMITS = { maxAnnotationsPerDoc: 20_000, maxCommentChars: 100_000, maxQuoteChars: 20_000 };
 
@@ -47,6 +53,47 @@ export class DurableAnnotationStore {
   byPage(path: string, page: number): AnnotationRecordV1[] { return this.indexes.byPage(path, page); }
   byPath(path: string): AnnotationRecordV1[] { return this.indexes.byPath(path); }
   byId(path: string, id: string): AnnotationRecordV1 | undefined { return this.indexes.byId(path, id); }
+  documentPaths(): string[] { return this.indexes.paths(); }
+
+  // Move persisted document keys after an Obsidian vault rename. The complete
+  // batch is validated before any mutation so folder renames cannot partially
+  // move data. Replaying an already-applied rename is a no-op because only
+  // currently stored source paths participate in collision checks.
+  rekeyDocumentPaths(moves: readonly DocumentPathMove[]): RekeyDocumentPathsResult {
+    if (this.isReadonly) return { ok: false, reason: "readonly" };
+
+    const plannedBySource = new Map<string, DocumentPathMove>();
+    for (const move of moves) {
+      if (move.oldPath === move.newPath || !this.data.documents[move.oldPath]) continue;
+      const existing = plannedBySource.get(move.oldPath);
+      if (existing && existing.newPath !== move.newPath) {
+        return { ok: false, reason: "destination-conflict" };
+      }
+      plannedBySource.set(move.oldPath, { oldPath: move.oldPath, newPath: move.newPath });
+    }
+    const planned = Array.from(plannedBySource.values());
+    if (planned.length === 0) return { ok: true, moved: 0 };
+
+    const movingSources = new Set(planned.map((move) => move.oldPath));
+    const destinations = new Set<string>();
+    for (const move of planned) {
+      if (destinations.has(move.newPath)) return { ok: false, reason: "destination-conflict" };
+      destinations.add(move.newPath);
+      if (this.data.documents[move.newPath] && !movingSources.has(move.newPath)) {
+        return { ok: false, reason: "destination-conflict" };
+      }
+    }
+
+    const documents = planned.map((move) => ({ move, document: this.data.documents[move.oldPath] }));
+    for (const { move } of documents) delete this.data.documents[move.oldPath];
+    for (const { move, document } of documents) {
+      document.revision++;
+      this.data.documents[move.newPath] = document;
+    }
+    this.data.stateRevision++;
+    this.commit("documents", [], { documentMoves: planned });
+    return { ok: true, moved: planned.length };
+  }
 
   // Compatibility repair for documents created before PDF.js 5.x fingerprint
   // discovery was supported. Never rewrites an already-verified fingerprint and
@@ -84,7 +131,7 @@ export class DurableAnnotationStore {
     doc.annotations[id] = record;
     doc.revision++;
     this.data.stateRevision++;
-    this.commit(path, [{ id, page: record.anchor.pageNumber }]);
+    this.commit(path, [{ id, page: record.anchor.pageNumber, kind: "created" }]);
     return { ok: true, annotation: structuredClone(record), revision: this.data.stateRevision };
   }
 
@@ -95,20 +142,22 @@ export class DurableAnnotationStore {
     if (!ann) return { ok: false, reason: "annotation not found" };
     if (ann.revision !== baseRevision) return { ok: false, reason: "revision conflict; annotation was modified elsewhere" };
     const applied = { ...patch };
-    // cardPosition: clamp y to the page's own height (page-css space). x (viewer-container px)
-    // is passed through. undefined clears the whole position.
-    if (applied.cardPosition !== undefined && applied.cardPosition !== null) {
-      const ph = ann.anchor.geometry.pageHeight;
-      const y = Number.isFinite(applied.cardPosition.y) ? applied.cardPosition.y : 0;
-      const x = Number.isFinite(applied.cardPosition.x) ? applied.cardPosition.x : undefined;
-      applied.cardPosition = { space: "page-css-v1", y: Math.max(0, Math.min(y, ph)), ...(x !== undefined ? { x } : {}) };
+    // This legacy v1 field deliberately has mixed coordinates: y is page-local
+    // scale-1 CSS, while x is viewer-container content px. Only y can be
+    // normalized durably against the annotation page. Current layout bounds,
+    // card width, and card height belong to the transient DOM projection.
+    // Explicit undefined still clears the whole position.
+    if (Object.prototype.hasOwnProperty.call(applied, "cardPosition") && applied.cardPosition !== undefined) {
+      const cardPosition = sanitizeCardPosition(applied.cardPosition, ann.anchor.geometry.pageHeight);
+      if (!cardPosition) return { ok: false, reason: "invalid card position" };
+      applied.cardPosition = cardPosition;
     }
     Object.assign(ann, applied);
     ann.revision++;
     ann.updatedAt = new Date().toISOString();
     doc.revision++;
     this.data.stateRevision++;
-    this.commit(path, [{ id, page: ann.anchor.pageNumber }]);
+    this.commit(path, [{ id, page: ann.anchor.pageNumber, kind: "updated" }]);
     return { ok: true, annotation: structuredClone(ann), revision: this.data.stateRevision };
   }
 
@@ -122,7 +171,7 @@ export class DurableAnnotationStore {
     doc.revision++;
     this.data.stateRevision++;
     if (Object.keys(doc.annotations).length === 0) delete this.data.documents[path]; // prune empty (spec §5.1)
-    this.commit(path, [{ id, page, deleted: true }]);
+    this.commit(path, [{ id, page, deleted: true, kind: "deleted" }]);
     return { ok: true, annotation: structuredClone(ann), revision: this.data.stateRevision };
   }
 
@@ -143,7 +192,7 @@ export class DurableAnnotationStore {
     doc.annotations[tombstone.id] = restored;
     doc.revision++;
     this.data.stateRevision++;
-    this.commit(path, [{ id: tombstone.id, page: restored.anchor.pageNumber }]);
+    this.commit(path, [{ id: tombstone.id, page: restored.anchor.pageNumber, kind: "restored" }]);
     return { ok: true, annotation: structuredClone(restored), revision: this.data.stateRevision };
   }
 
@@ -215,7 +264,7 @@ export class DurableAnnotationStore {
     this.data.stateRevision++;
     this.indexes.rebuild(this.data);
     for (const cb of this.changeListeners) cb("settings", []);
-    this.coord.enqueue(snapshotData(this.data), this.data.stateRevision);
+    this.coord.enqueue(this.data, this.data.stateRevision);
     return result;
   }
 
@@ -233,9 +282,9 @@ export class DurableAnnotationStore {
     return this.data.documents[path];
   }
 
-  private commit(path: string, changes: ChangeEntry[]) {
+  private commit(path: string, changes: ChangeEntry[], payload?: StoreChangePayload) {
     this.indexes.rebuild(this.data);
-    for (const cb of this.changeListeners) cb(path, changes);
-    this.coord.enqueue(snapshotData(this.data), this.data.stateRevision);
+    for (const cb of this.changeListeners) cb(path, changes, payload);
+    this.coord.enqueue(this.data, this.data.stateRevision);
   }
 }

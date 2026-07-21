@@ -1,6 +1,7 @@
 // src/render/annotation-card-rail.ts
 import { createIcon } from "src/render/icons";
 import type { Translate } from "src/i18n";
+import { annotationElements } from "src/render/annotation-dom";
 
 export interface EphemeralCardInput {
   side: "left" | "right";
@@ -16,14 +17,21 @@ export function drawEphemeralCard(
   input: EphemeralCardInput
 ): HTMLElement {
   const railClass = input.side === "left" ? "rm-card-rail-left" : "rm-card-rail-right";
-  let rail = containerEl.querySelector<HTMLElement>(`.${railClass}`);
+  const pageNumber = pageEl.dataset.pageNumber ?? "unknown";
+  let rail = containerEl.querySelector<HTMLElement>(`.rm-page-card-rail.${railClass}[data-page-number="${pageNumber}"]`);
   if (!rail) {
     rail = containerEl.ownerDocument.createElement("div");
-    rail.className = `rm-card-rail ${railClass}`;
+    rail.className = `rm-card-rail rm-page-card-rail ${railClass}`;
+    rail.dataset.pageNumber = pageNumber;
+    rail.dataset.side = input.side;
+    const containerRect = containerEl.getBoundingClientRect();
+    const pageRect = pageEl.getBoundingClientRect();
+    rail.style.top = `${pageRect.top - containerRect.top + containerEl.scrollTop}px`;
+    rail.style.height = `${pageEl.offsetHeight || pageRect.height}px`;
     containerEl.appendChild(rail);
   }
   // Remove any existing card for this annotation (prevents duplicates on re-render).
-  if (input.id) rail.querySelector(`.rm-card[data-annotation-id="${input.id}"]`)?.remove();
+  if (input.id) annotationElements(rail, ".rm-card", input.id).forEach((node) => node.remove());
   const card = containerEl.ownerDocument.createElement("div");
   card.className = "rm-card";
   if (input.id) card.dataset.annotationId = input.id;
@@ -61,6 +69,7 @@ export interface BuildCardInput {
   quote: string;
   comment?: string;
   color: string;
+  colorId?: string;
   colors: { id: string; value: string; label: string }[];
   markStyle: "highlight" | "underline";
   side: "left" | "right";
@@ -77,8 +86,12 @@ export interface BuildCardInput {
 // All text via textContent; never innerHTML (spec §14.1).
 export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCallbacks, t: Translate): HTMLElement {
   const doc = parent.ownerDocument;
+  const valueMatches = input.colors.filter((color) => color.value.toLowerCase() === input.color.toLowerCase());
+  const activeColorId = input.colorId && input.colors.some((color) => color.id === input.colorId)
+    ? input.colorId
+    : valueMatches.length === 1 ? valueMatches[0].id : undefined;
   // Dedup: remove existing card for this annotation (re-render).
-  parent.querySelectorAll(`.rm-card[data-annotation-id="${input.id}"]`).forEach((n) => n.remove());
+  annotationElements(parent, ".rm-card", input.id).forEach((node) => node.remove());
 
   const card = doc.createElement("div");
   card.className = "rm-card";
@@ -104,6 +117,12 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
   // styled via CSS :hover). Re-render preserves the connector via its `selected` flag.
   card.addEventListener("mouseenter", () => cb.onHover(input.id, true));
   card.addEventListener("mouseleave", () => cb.onHover(input.id, false));
+  card.addEventListener("focusin", () => cb.onHover(input.id, true));
+  card.addEventListener("focusout", (event) => {
+    const NodeCtor = card.ownerDocument.defaultView?.Node;
+    const remainsInside = !!NodeCtor && event.relatedTarget instanceof NodeCtor && card.contains(event.relatedTarget);
+    if (!remainsInside) cb.onHover(input.id, false);
+  });
 
   // Scrollable text area (quote + comment/textarea); ops stay fixed at the bottom.
   const textArea = doc.createElement("div");
@@ -113,6 +132,7 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
   const quoteEl = doc.createElement("div");
   quoteEl.className = "rm-card-quote";
   quoteEl.textContent = input.quote;
+  quoteEl.title = input.quote; // the quote is clamped to 3 lines - hover reveals it whole
   textArea.appendChild(quoteEl);
 
   if (input.editing) {
@@ -120,7 +140,7 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     const ta = doc.createElement("textarea");
     ta.className = "rm-card-edit";
     ta.value = input.draftValue ?? input.comment ?? "";
-    ta.placeholder = "...";
+    ta.placeholder = t("card.placeholder");
     // Sync every input into the DraftController so a re-render (zoom/textlayer
     // rebuild) or conflict restores the current value instead of the stale one (H-04).
     ta.addEventListener("input", () => cb.onDraftUpdate(input.id, ta.value));
@@ -163,22 +183,37 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     for (const c of input.colors) {
       const sw = doc.createElement("button");
       sw.className = "rm-color-swatch";
-      sw.style.background = c.value;
       sw.title = c.label;
       sw.setAttribute("aria-label", t("card.color.aria", { label: c.label }));
+      const dot = doc.createElement("span");
+      dot.className = "rm-color-swatch-dot";
+      dot.style.background = c.value;
+      sw.appendChild(dot);
+      // Mark the card's current color: recognition over recall (and it makes the
+      // swatch row read as a state control, not just a palette).
+      const active = c.id === activeColorId;
+      sw.setAttribute("aria-pressed", String(active));
+      if (active) {
+        sw.classList.add("rm-color-swatch-active");
+      }
       sw.addEventListener("click", (e) => { e.stopPropagation(); cb.onChangeColor(input.id, c.id); });
       colorsGroup.appendChild(sw);
     }
     const toggle = doc.createElement("button");
     toggle.className = "rm-card-toggle";
-    toggle.textContent = input.markStyle === "highlight" ? "U̲" : "H";
+    // Icon shows the TARGET style (click to switch): highlight → underline icon, and vice versa.
+    toggle.appendChild(createIcon(doc, input.markStyle === "highlight" ? "underline" : "highlighter", 14));
     toggle.title = t("card.toggleType");
     toggle.setAttribute("aria-label", t("card.toggleType"));
     toggle.addEventListener("click", (e) => { e.stopPropagation(); cb.onToggleType(input.id); });
     const del = doc.createElement("button");
     del.className = "rm-card-delete"; del.title = t("card.delete"); del.appendChild(createIcon(doc, "trash", 14));
     del.addEventListener("click", (e) => { e.stopPropagation(); cb.onDelete(input.id); });
-    ops.append(colorsGroup, toggle, del);
+    // Right-side action group: type toggle + delete (keeps ops row's space-between layout: colors left, actions right).
+    const actionsGroup = doc.createElement("div");
+    actionsGroup.className = "rm-card-ops-actions";
+    actionsGroup.append(toggle, del);
+    ops.append(colorsGroup, actionsGroup);
     card.appendChild(ops);
     // Click quote or comment to enter edit mode.
     textArea.addEventListener("click", () => cb.onEdit(input.id));

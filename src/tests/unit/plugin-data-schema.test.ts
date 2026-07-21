@@ -71,6 +71,29 @@ describe("parsePluginData", () => {
     expect(r.state).toBe("valid");
     expect(Object.keys(r.data!.documents["a.pdf"].annotations)).toEqual(["good"]);
   });
+  it("preserves a valid legacy mixed-space card position as a fresh plain object", () => {
+    const cardPosition = { space: "page-css-v1", x: 420, y: 780 };
+    const r = parsePluginData({
+      schemaVersion: 1,
+      settings: { colors: [{ id: "y", name: "Y", value: "#fff15c" }], defaultColorId: "y" },
+      documents: { "a.pdf": {
+        documentId: "d1", sourceSignature: { pdfFingerprint: "fp", numPages: 1 }, revision: 1,
+        annotations: { a1: {
+          id: "a1", revision: 1, type: "text-mark", markStyle: "highlight",
+          colorLabelSnapshot: "Y", colorValueSnapshot: "#fff15c", cardPosition,
+          anchor: { kind: "pdf-text", version: 1, pageNumber: 1,
+            quote: { exact: "hi", normalization: "collapse-whitespace-v1" },
+            geometry: { space: "page-css-v1", pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 0, y: 0, width: 10, height: 10 }] } },
+          createdAt: "t", updatedAt: "t",
+        } },
+      } },
+    });
+
+    const parsed = r.data!.documents["a.pdf"].annotations.a1.cardPosition;
+    expect(parsed).toEqual(cardPosition);
+    expect(parsed).not.toBe(cardPosition);
+    expect(Object.getPrototypeOf(parsed!)).toBe(Object.prototype);
+  });
   it("rejects an annotation with invalid color hex (H-02)", () => {
     const r = parsePluginData({
       schemaVersion: 1,

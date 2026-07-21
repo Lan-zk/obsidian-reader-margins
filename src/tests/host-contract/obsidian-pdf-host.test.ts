@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { buildHostFixture } from "src/tests/host-contract/host-shape-fixture";
-import { probeHostHandles, readPdfFingerprint } from "src/host/obsidian-pdf-host";
+import { probeHostHandles, readPagesRotation, readPdfFingerprint } from "src/host/obsidian-pdf-host";
 import { probeCapabilities } from "src/host/host-capabilities";
 
 describe("probeHostHandles", () => {
@@ -59,5 +59,20 @@ describe("readPdfFingerprint", () => {
   it("returns undefined when no pdfDocument", () => {
     const { view } = buildHostFixture({});
     expect(readPdfFingerprint(probeHostHandles(view)!)).toBeUndefined();
+  });
+});
+
+describe("readPagesRotation", () => {
+  it("reads and validates the PDFViewer pagesRotation API", () => {
+    const { view } = buildHostFixture({ rotation: 90 });
+    expect(readPagesRotation(probeHostHandles(view)!)).toBe(90);
+  });
+  it("returns undefined for missing or unsupported rotation values", () => {
+    const { view } = buildHostFixture({});
+    const viewer = (view as any).viewer.child.pdfViewer.pdfViewer;
+    delete viewer.pagesRotation;
+    expect(readPagesRotation(probeHostHandles(view)!)).toBeUndefined();
+    viewer.pagesRotation = 45;
+    expect(readPagesRotation(probeHostHandles(view)!)).toBeUndefined();
   });
 });

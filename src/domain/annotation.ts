@@ -3,10 +3,13 @@ import type { PdfTextAnchorV1 } from "src/domain/pdf-text-anchor";
 
 export type MarkStyle = "highlight" | "underline";
 
-// User-dragged card position, in the same unscaled page-css space as anchor.geometry
-// (page-relative, zoom-stable). Absent on the record = auto-layout (push-down).
+// Legacy v1 mixed-coordinate card position. `space` describes y only: y is
+// page-local scale-1 CSS (page-relative and zoom-stable), while x is viewer-
+// container content px. Current window, rail, and card-size clamps are transient
+// DOM projection concerns and must not be written back during rendering.
+// Absent on the record = auto-layout (push-down).
 export interface CardPositionV1 {
-  space: "page-css-v1"; // y is page-relative unscaled; x (if present) is viewer-container content px
+  space: "page-css-v1";
   y: number; // card top, page-relative, unscaled (scales with zoom)
   x?: number; // card left in viewer-container content coordinates (zoom-independent); absent = auto
 }

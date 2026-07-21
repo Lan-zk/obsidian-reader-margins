@@ -30,6 +30,7 @@ export class AnnotationIndexes {
   byPath(path: string): AnnotationRecordV1[] { return this.byPathMap.get(path) ?? []; }
   byId(path: string, id: string): AnnotationRecordV1 | undefined { return this.byIdMap.get(path)?.get(id); }
   byPage(path: string, page: number): AnnotationRecordV1[] { return this.byPageMap.get(path)?.get(page) ?? []; }
+  paths(): string[] { return Array.from(this.byPathMap.keys()); }
 
   document(data: PluginDataV1, path: string): PdfAnnotationDocumentV1 | undefined { return data.documents[path]; }
 }

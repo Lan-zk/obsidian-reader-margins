@@ -1,6 +1,12 @@
 /* Reader Margins - Atomic Utility design system (docs/design.md) */
 /* Flat, no shadows, 1px borders, tonal layering, 4px/8px radii, muted palette. */
 
+/* --- Motion tokens: natural deceleration only (no bounce/elastic) ---------- */
+.theme-dark, .theme-light {
+  --rm-ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --rm-ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 /* --- Palette --------------------------------------------------------------- */
 .theme-dark {
   --rm-surface: #131313;
@@ -34,10 +40,24 @@
 /* --- Marks (highlight / underline) ---------------------------------------- */
 .rm-mark-layer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 .rm-mark { position: absolute; pointer-events: none; }
+/* Underline: pill ends (Soft-Square), a confident 2.5px stroke. */
+.rm-mark-underline { border-radius: 9999px; }
 
 /* --- Card rails ----------------------------------------------------------- */
 .rm-card-rail { position: absolute; inset: 0; left: 0; right: 0; pointer-events: none; z-index: 10; }
 .rm-card-rail-left, .rm-card-rail-right { left: 0; right: 0; }
+.rm-page-card-rail {
+  inset: auto;
+  box-sizing: border-box;
+  overflow-x: visible;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rm-outline-variant) transparent;
+}
+.rm-page-card-rail[data-layout-mode="normal"] { overflow-y: visible; }
+.rm-page-card-rail[data-layout-mode="dense"] { overflow-y: auto; pointer-events: auto; }
+.rm-page-card-rail-spacer { position: absolute; top: 0; left: 0; width: 1px; pointer-events: none; }
+.rm-page-card-rail::-webkit-scrollbar { width: 6px; }
+.rm-page-card-rail::-webkit-scrollbar-thumb { background: var(--rm-outline-variant); border-radius: 9999px; }
 
 /* --- Cards: border-defined on the base surface, 1px colored border, 8px radius (Atomic Minimalism) -- */
 .rm-card {
@@ -47,7 +67,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;                      /* 4px grid: 8px between text area and ops */
-  padding: 10px;                 /* design.md: cards 8px padding */
+  padding: 12px;                 /* 4px grid (was 10px - off-grid) */
   background-color: var(--rm-surface); /* base surface: the 1px colored border defines the card (no gray fill) */
   border: 1px solid var(--rm-card-color, var(--rm-outline-variant)); /* annotation color, set inline via --rm-card-color */
   border-radius: 8px;            /* design.md: cards 8px radius */
@@ -56,77 +76,116 @@
   min-width: 0;
   color: var(--rm-on-surface);
   font-family: "Hanken Grotesk", var(--font-text), var(--default-font), sans-serif;
-  transition: background-color 120ms ease-out, border-color 120ms ease-out;
+  font-kerning: normal; text-rendering: optimizeLegibility;
+  transition: background-color 120ms var(--rm-ease-out-quart), border-color 120ms var(--rm-ease-out-quart);
 }
-/* Hover = selected state: per-color tint + deepened annotation border (no generic gray/dark ring). */
+/* Hover = selected state: luminous per-color tint + deepened annotation border.
+   Bolder pass: 18% wash (was 14%), 85% border deepen (was 70%) - the card's color
+   identity becomes unmistakable on hover. */
 .rm-card:hover {
   z-index: 2;
-  background-color: color-mix(in srgb, var(--rm-card-color) 14%, var(--rm-surface));
-  border-color: color-mix(in srgb, var(--rm-card-color) 70%, var(--rm-on-surface));
+  background-color: color-mix(in srgb, var(--rm-card-color) 18%, var(--rm-surface));
+  border-color: color-mix(in srgb, var(--rm-card-color) 85%, var(--rm-on-surface));
 }
 /* Scrollable text area; ops stay fixed at the bottom (not scrolling). */
 .rm-card-text { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 16px; /* clear the top-right grip */ }
 .rm-card-text::-webkit-scrollbar { width: 6px; }
 .rm-card-text::-webkit-scrollbar-thumb { background: var(--rm-outline-variant); border-radius: 9999px; }
-/* 高亮的原文: 1px left rule (within the side-stripe ban), muted italic */
+/* 高亮的原文: 1px left rule in the ANNOTATION COLOR (60% mix) - the thread of
+   color continues into the quote, marking it as "the highlighted original".
+   NO italic: oblique is a Latin convention - synthesized CJK italics look broken,
+   and this plugin is 中英混排. The colored rule + muted color carry the "quote"
+   role instead. Clamped to 3 lines: the quote is context, the comment is content. */
 .rm-card-quote {
-  font-size: 12px; line-height: 16px; font-style: italic; color: var(--rm-on-surface-variant);
-  border-left: 1px solid var(--rm-outline-variant); padding-left: 8px;
+  font-size: 12px; line-height: 16px; color: var(--rm-on-surface-variant);
+  border-left: 1px solid color-mix(in srgb, var(--rm-card-color, var(--rm-outline-variant)) 60%, var(--rm-outline-variant));
+  padding-left: 8px;
   word-break: break-word; cursor: text;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 /* 用户批注的内容: body text (no left line) */
 .rm-card-comment {
   font-size: 13px; line-height: 18px; color: var(--rm-on-surface);
-  word-break: break-word; white-space: pre-wrap; cursor: text;
+  word-break: break-word; overflow-wrap: break-word; white-space: pre-wrap; cursor: text;
 }
-/* Operation row: fixed at card bottom; color swatches (left) + delete (right) */
+/* Operation row: fixed at card bottom; color swatches (left) + delete (right).
+   Smooth reveal: opacity fades, visibility flips after the fade when hiding. */
 .rm-card-ops {
   display: flex; justify-content: space-between; align-items: center; flex: 0 0 auto;
-  min-height: 18px; visibility: hidden; opacity: 0; pointer-events: none;
+  min-height: 24px; visibility: hidden; opacity: 0; pointer-events: none;
+  transition: opacity 150ms var(--rm-ease-out-quart), visibility 0s linear 150ms;
 }
-.rm-card:hover .rm-card-ops, .rm-card:focus-within .rm-card-ops { visibility: visible; opacity: 1; pointer-events: auto; }
+.rm-card:hover .rm-card-ops, .rm-card:focus-within .rm-card-ops {
+  visibility: visible; opacity: 1; pointer-events: auto;
+  transition: opacity 150ms var(--rm-ease-out-quart), visibility 0s;
+}
 .rm-card-ops-edit {
   display: flex; justify-content: flex-end; gap: 4px; flex: 0 0 auto;
   visibility: visible; opacity: 1; pointer-events: auto;
 }
-.rm-card-colors { display: inline-flex; gap: 6px; align-items: center; }
+.rm-card-colors { display: inline-flex; gap: 4px; align-items: center; }
+/* Right-side action group: type toggle + delete. */
+.rm-card-ops-actions { display: inline-flex; gap: 4px; align-items: center; }
 /* Grip drag-handle (top-right); revealed on hover, future drag starts here. */
 .rm-card-grip {
   position: absolute; top: 4px; right: 4px; z-index: 1;
   display: inline-flex; align-items: center; justify-content: center;
-  width: 18px; height: 18px; background: transparent; border: none; border-radius: 4px;
+  width: 20px; height: 20px; background: transparent; border: none; border-radius: 4px;
   cursor: grab; padding: 0; color: var(--rm-on-surface-variant); opacity: 0; touch-action: none;
-  transition: opacity 120ms ease-out, color 120ms ease-out, background-color 120ms ease-out;
+  transition: opacity 120ms var(--rm-ease-out-quart), color 120ms var(--rm-ease-out-quart), background-color 120ms var(--rm-ease-out-quart);
 }
-.rm-card:hover .rm-card-grip { opacity: 0.7; }
-.rm-card-grip:hover { opacity: 1; color: var(--rm-on-surface); background-color: var(--rm-surface-3); }
+.rm-card:hover .rm-card-grip, .rm-card:focus-within .rm-card-grip { opacity: 0.7; }
+.rm-card-grip:focus-visible { opacity: 1; }
+/* Grip hover takes the annotation color: tinted ground + deepened-color icon. */
+.rm-card-grip:hover {
+  opacity: 1;
+  color: color-mix(in srgb, var(--rm-card-color, var(--rm-on-surface)) 70%, var(--rm-on-surface));
+  background-color: color-mix(in srgb, var(--rm-card-color, var(--rm-surface-3)) 28%, var(--rm-surface));
+}
 /* Dragging: follow the pointer without lag, lift above siblings, suppress selection. */
 .rm-card-dragging { z-index: 3; transition: none !important; user-select: none; }
 .rm-card-dragging .rm-card-grip { cursor: grabbing; opacity: 1; }
 .rm-color-swatch {
-  width: 16px; height: 16px; border-radius: 9999px; border: 1px solid var(--rm-outline-variant);
-  cursor: pointer; padding: 0; transition: transform 120ms ease-out;
-}
-.rm-color-swatch:hover { transform: scale(1.12); }
-/* Default-color ring: a gap-separated outline visible on any swatch color. */
-.rm-color-swatch-default { box-shadow: 0 0 0 1.5px var(--rm-surface-1), 0 0 0 2.5px var(--rm-outline); }
-/* Icon buttons: save / cancel / delete (consistent 2px-stroke SVG icons, scaled) */
-.rm-card-delete, .rm-card-save, .rm-card-cancel {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 22px; height: 22px; background: transparent;
+  width: 24px; height: 24px; border-radius: 4px; border: 0; background: transparent;
+  cursor: pointer; padding: 0;
+}
+.rm-color-swatch-dot {
+  display: block; width: 16px; height: 16px; border-radius: 9999px;
+  border: 1px solid var(--rm-outline-variant);
+  transition: transform 120ms var(--rm-ease-out-quart);
+}
+.rm-color-swatch:hover .rm-color-swatch-dot { transform: scale(1.2); }
+.rm-color-swatch:active .rm-color-swatch-dot { transform: scale(0.92); }
+/* Default-color ring: a gap-separated outline visible on any swatch color. */
+.rm-color-swatch-default .rm-color-swatch-dot { box-shadow: 0 0 0 1.5px var(--rm-surface-1), 0 0 0 2.5px var(--rm-outline); }
+/* Current-color ring (on cards): darker, higher-contrast ring than the default
+   marker - reads as "this one is ON". */
+.rm-color-swatch-active .rm-color-swatch-dot { box-shadow: 0 0 0 1.5px var(--rm-surface), 0 0 0 2.5px var(--rm-on-surface); }
+/* Focus parity with toolbar buttons: keyboard users get the same affordance. */
+.rm-color-swatch:focus-visible, .rm-card-delete:focus-visible, .rm-card-save:focus-visible,
+.rm-card-cancel:focus-visible, .rm-card-toggle:focus-visible, .rm-card-grip:focus-visible {
+  outline: 2px solid var(--rm-primary); outline-offset: 1px;
+}
+/* Icon buttons: save / cancel / delete / type-toggle (consistent 2px-stroke SVG icons, scaled).
+   24px target (was 22 - off-grid AND below comfortable click size). */
+.rm-card-delete, .rm-card-save, .rm-card-cancel, .rm-card-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; background: transparent;
   border: 1px solid var(--rm-outline-variant); border-radius: 4px;
   cursor: pointer; padding: 0; color: var(--rm-on-surface);
-  transition: background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out;
+  transition: background-color 120ms var(--rm-ease-out-quart), border-color 120ms var(--rm-ease-out-quart), color 120ms var(--rm-ease-out-quart);
 }
-.rm-card-delete:hover, .rm-card-save:hover, .rm-card-cancel:hover {
+.rm-card-delete:hover, .rm-card-save:hover, .rm-card-cancel:hover, .rm-card-toggle:hover {
   background-color: var(--rm-surface-2); border-color: var(--rm-outline);
 }
 .rm-card-delete:hover { color: var(--rm-error); border-color: var(--rm-error); }
-.rm-card-delete svg, .rm-card-save svg, .rm-card-cancel svg { display: block; }
+.rm-card-delete svg, .rm-card-save svg, .rm-card-cancel svg, .rm-card-toggle svg { display: block; }
 .rm-card-edit {
   width: 100%; min-height: 44px; font-size: 13px; line-height: 18px;
   font-family: inherit; background: var(--rm-surface); color: var(--rm-on-surface);
   border: 1px solid var(--rm-outline-variant); border-radius: 4px; padding: 6px 8px; resize: vertical;
+  transition: border-color 150ms var(--rm-ease-out-quart), background-color 150ms var(--rm-ease-out-quart);
 }
 .rm-card-edit:focus { border-color: var(--rm-primary); outline: none; }
 
@@ -137,15 +196,56 @@
   12% { background-color: color-mix(in srgb, var(--rm-card-color, var(--rm-secondary)) 22%, var(--rm-surface)); }
   100% { background-color: var(--rm-surface); }
 }
-.rm-card-linked { animation: rm-card-flash 1.4s ease-out; }
+.rm-card-linked { animation: rm-card-flash 1.4s var(--rm-ease-out-expo); }
 
-/* --- Connector: flat muted line + anchor dot ------------------------------ */
-.rm-connector-layer { position: absolute; inset: 0; pointer-events: none; z-index: 5; overflow: visible; }
-.rm-connector path { transition: opacity 200ms ease-out; stroke-dasharray: 4 3; }
-.rm-connector circle { transition: opacity 200ms ease-out; }
+/* Saved acknowledgment: a 600ms primary outline that appears and dissolves.
+   Delight pass - quiet, flat (outline, not shadow), once per save. */
+@keyframes rm-card-saved {
+  0% { outline: 2px solid transparent; outline-offset: 1px; }
+  30% { outline-color: var(--rm-primary); }
+  100% { outline-color: transparent; }
+}
+.rm-card-saved { animation: rm-card-saved 600ms var(--rm-ease-out-quart); }
+
+/* --- Card lifecycle motion (animate pass) ----------------------------------- */
+/* Enter: a newly created/restored card rises 8px and fades in. Applied ONLY to
+   genuine appearances (viewer-session guards re-renders) so zoom/scroll stays still. */
+@keyframes rm-card-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.rm-card-enter { animation: rm-card-enter 240ms var(--rm-ease-out-expo); }
+
+/* Settle: 180ms 1.02→1 scale after a drag drop - "position saved" feedback. */
+@keyframes rm-card-settle {
+  from { transform: scale(1.02); }
+  to { transform: scale(1); }
+}
+.rm-card-settle { animation: rm-card-settle 180ms var(--rm-ease-out-quart); }
+
+/* Exit: 150ms fade + slide toward the page edge (direction follows the rail). */
+@keyframes rm-card-exit-right {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(8px); }
+}
+@keyframes rm-card-exit-left {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(-8px); }
+}
+.rm-card-exit { animation: rm-card-exit-right 150ms ease-in forwards; pointer-events: none; }
+.rm-card-rail-left .rm-card-exit { animation-name: rm-card-exit-left; }
+
+/* --- Connector: flat muted line + anchor dots ----------------------------- */
+/* Above the card rail (z-index 10) so the card-end dot visibly attaches to the
+   card edge instead of sliding under it (card-ui-design.md says 100; the CSS had
+   drifted to 5 - restored above-rail ordering with a semantic value). */
+.rm-connector-layer { position: absolute; inset: 0; pointer-events: none; z-index: 12; overflow: visible; }
+/* 5 3 stitch (was 4 3): a longer, more deliberate dash reads as "thread". */
+.rm-connector path { transition: opacity 200ms var(--rm-ease-out-quart); stroke-dasharray: 5 3; }
+.rm-connector circle { transition: opacity 200ms var(--rm-ease-out-quart); }
 /* Dashes flow toward the card when its link is active (mark click) or selected. */
 @keyframes rm-connector-flow {
-  to { stroke-dashoffset: -7; }
+  to { stroke-dashoffset: -8; }
 }
 .rm-connector-active path, .rm-connector-selected path {
   opacity: 0.95 !important;
@@ -153,43 +253,121 @@
 }
 .rm-connector-active circle, .rm-connector-selected circle { opacity: 1; }
 
+/* Overdrive A - "Stitch": the connector draws itself from the mark to the card
+   on creation. The exact path length comes from JS (--rm-stitch-len); the dash
+   runs len -> 0 over 420ms, then the dash pattern discretely flips to the 5 3
+   stitch at 90-100% - the drawn thread "becomes" the stitch. No JS loop. */
+@keyframes rm-connector-stitch {
+  from { stroke-dasharray: var(--rm-stitch-len) var(--rm-stitch-len); stroke-dashoffset: var(--rm-stitch-len); }
+  90% { stroke-dasharray: var(--rm-stitch-len) var(--rm-stitch-len); stroke-dashoffset: 0; }
+  to { stroke-dasharray: 5 3; stroke-dashoffset: 0; }
+}
+.rm-connector path.rm-connector-stitch {
+  animation: rm-connector-stitch 420ms var(--rm-ease-out-expo) forwards;
+  opacity: 0.9;
+}
+
+/* Overdrive B - "Taut thread": hovering a card lifts the source highlight too.
+   Scoped per style: highlights lift opacity, underlines saturate (an underline
+   has no group opacity - applying one would DIM it). */
+.rm-mark-group { transition: opacity 150ms var(--rm-ease-out-quart), filter 150ms var(--rm-ease-out-quart); }
+.rm-mark-group-highlight.rm-mark-hover { opacity: 0.62 !important; filter: saturate(1.25); }
+.rm-mark-group-underline.rm-mark-hover { filter: saturate(1.4); }
+
 /* --- Persistence status --------------------------------------------------- */
-.rm-persistence-status { display: inline-block; width: 8px; height: 8px; border-radius: 9999px;
-  margin-left: 6px; vertical-align: middle; }
-.rm-persistence-saving { background: var(--rm-on-surface-variant); }
-.rm-persistence-failed { background: var(--rm-error); cursor: help; }
-.rm-persistence-dirty { background: var(--rm-secondary); }
+/* Shape carries the state as well as color (colorblind-safe double coding):
+   saving = hollow ring, dirty = square chip, failed = solid dot. */
+.rm-persistence-status { display: inline-block; width: 8px; height: 8px;
+  margin-left: 6px; vertical-align: middle; box-sizing: border-box; }
+.rm-persistence-saving {
+  border: 1.5px solid var(--rm-on-surface-variant); border-radius: 9999px; background: transparent;
+  animation: rm-persistence-pulse 1.2s var(--rm-ease-out-quart) infinite;
+}
+/* Saving ring breathes; dirty/failed stay static (their shape already speaks). */
+@keyframes rm-persistence-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.rm-persistence-failed { background: var(--rm-error); border-radius: 9999px; cursor: help; }
+.rm-persistence-dirty { background: var(--rm-secondary); border-radius: 2px; }
+
+/* --- Export modal status --------------------------------------------------- */
+/* Semantic color: none = neutral info, owner = caution (overwrite), foreign = blocked. */
+.rm-export-status { margin: 4px 0 8px; font-size: 13px; line-height: 18px; }
+.rm-export-status-none { color: var(--rm-on-surface-variant); }
+.rm-export-status-owner { color: var(--rm-secondary); }
+.rm-export-status-foreign { color: var(--rm-error); font-weight: 500; }
 
 /* --- Toolbar -------------------------------------------------------------- */
 .rm-toolbar-fallback {
-  position: absolute; top: 4px; right: 8px; z-index: 200; display: flex; gap: 2px;
-  align-items: center; padding: 4px 6px; background: var(--rm-surface-1); border-radius: 8px;
+  position: absolute; top: 4px; right: 8px; z-index: 200; display: flex; gap: 4px;
+  align-items: center; padding: 4px 8px; background: var(--rm-surface-1); border-radius: 8px;
   border: 1px solid var(--rm-outline-variant);
 }
-.rm-toolbar-colors { display: inline-flex; gap: 6px; align-items: center; }
+.rm-toolbar-colors { display: inline-flex; gap: 8px; align-items: center; }
 .rm-toolbar-separator { width: 1px; height: 18px; background: var(--rm-outline-variant); margin: 0 4px; flex: 0 0 auto; }
-/* Icon buttons: transparent toolbar affordance, hover lifts one tonal step. */
+/* Icon buttons: transparent toolbar affordance; hover takes a primary tint so
+   the bar feels alive, not just "one tonal step up". */
 .rm-toolbar-underline, .rm-toolbar-export {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; background: transparent; border: 1px solid transparent;
   border-radius: 6px; cursor: pointer; padding: 0; color: var(--rm-on-surface);
-  transition: background-color 120ms ease-out, border-color 120ms ease-out;
+  transition: background-color 120ms var(--rm-ease-out-quart), border-color 120ms var(--rm-ease-out-quart), color 120ms var(--rm-ease-out-quart);
 }
 .rm-toolbar-underline:hover, .rm-toolbar-export:hover {
-  background-color: var(--rm-surface-2); border-color: var(--rm-outline-variant);
+  background-color: color-mix(in srgb, var(--rm-primary) 16%, var(--rm-surface-2));
+  border-color: color-mix(in srgb, var(--rm-primary) 45%, var(--rm-outline-variant));
+  color: var(--rm-primary);
 }
 .rm-toolbar-underline:focus-visible, .rm-toolbar-export:focus-visible {
   outline: 2px solid var(--rm-primary); outline-offset: 1px;
 }
 .rm-toolbar-underline svg, .rm-toolbar-export svg { display: block; }
+/* Export success: the button flashes primary once (delight pass). */
+@keyframes rm-export-success {
+  0% { color: var(--rm-primary); border-color: var(--rm-primary); background-color: color-mix(in srgb, var(--rm-primary) 16%, transparent); }
+  100% { color: inherit; border-color: transparent; background-color: transparent; }
+}
+.rm-toolbar-export-success { animation: rm-export-success 700ms var(--rm-ease-out-quart); }
+
+/* --- Onboarding hint (empty state) ------------------------------------------ */
+/* Quiet pill at the top-center of the viewer; appears only while a PDF has zero
+   annotations. Flat, 4px-grid, self-dismissing. */
+.rm-onboarding-hint {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 200;
+  display: inline-flex; align-items: center; gap: 8px;
+  max-width: min(480px, 80%); padding: 8px 8px 8px 12px;
+  background: var(--rm-surface-1); border: 1px solid var(--rm-outline-variant); border-radius: 8px;
+  color: var(--rm-on-surface); font-size: 12px; line-height: 16px;
+  animation: rm-hint-enter 240ms var(--rm-ease-out-expo);
+}
+@keyframes rm-hint-enter {
+  from { opacity: 0; transform: translateX(-50%) translateY(-4px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.rm-onboarding-hint-close {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  width: 20px; height: 20px; background: transparent; border: none; border-radius: 4px;
+  cursor: pointer; padding: 0; color: var(--rm-on-surface-variant);
+  transition: color 120ms var(--rm-ease-out-quart), background-color 120ms var(--rm-ease-out-quart);
+}
+.rm-onboarding-hint-close:hover { color: var(--rm-on-surface); background-color: var(--rm-surface-2); }
+.rm-onboarding-hint-close:focus-visible { outline: 2px solid var(--rm-primary); outline-offset: 1px; }
 
 /* --- Reduced motion ------------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
-  .rm-card, .rm-color-swatch, .rm-connector path, .rm-connector circle,
-  .rm-card-delete, .rm-card-save, .rm-card-cancel, .rm-card-grip,
-  .rm-toolbar-underline, .rm-toolbar-export {
+  .rm-card, .rm-color-swatch, .rm-color-swatch-dot, .rm-connector path, .rm-connector circle,
+  .rm-card-delete, .rm-card-save, .rm-card-cancel, .rm-card-toggle, .rm-card-grip,
+  .rm-toolbar-underline, .rm-toolbar-export, .rm-card-ops, .rm-card-edit {
     transition: none !important; animation: none !important;
   }
+  /* Lifecycle motion off: enter/settle/exit become instant (session also skips
+     the exit class under reduced motion), the saving ring stops pulsing. */
+  .rm-card-enter, .rm-card-settle, .rm-card-exit, .rm-persistence-saving,
+  .rm-card-saved, .rm-toolbar-export-success, .rm-onboarding-hint, .rm-onboarding-hint-close,
+  .rm-connector path.rm-connector-stitch, .rm-mark-group { animation: none !important; transition: none !important; }
+  /* Ops row must not stay invisible when its reveal transition is removed. */
+  .rm-card-ops { transition: none !important; }
   /* Flash becomes a static tonal tint so the link is still indicated. */
   .rm-card-linked { background-color: color-mix(in srgb, var(--rm-card-color, var(--rm-secondary)) 22%, var(--rm-surface)); }
 }

@@ -38,4 +38,25 @@ describe("captureAnchor", () => {
     expect(a!.quote.prefix).toBe("pre ");
     expect(a!.quote.suffix).toBe(" post");
   });
+  it("derives context from the selected repeated phrase instead of the first text match", () => {
+    const pageEl = document.createElement("div");
+    const textLayer = document.createElement("div");
+    const text = document.createTextNode("A repeat B repeat C");
+    textLayer.className = "textLayer";
+    textLayer.appendChild(text);
+    pageEl.appendChild(textLayer);
+    Object.defineProperty(pageEl, "getBoundingClientRect", {
+      value: () => ({ left: 0, top: 0, width: 600, height: 800, right: 600, bottom: 800 } as DOMRect),
+    });
+    const range = document.createRange();
+    range.setStart(text, 11);
+    range.setEnd(text, 17);
+    const selected = snap([{ left: 10, top: 10, width: 40, height: 12 }], "repeat");
+    selected.range = range;
+
+    const a = captureAnchor(selected, pageEl, 1, { pageWidth: 600, pageHeight: 800, rotation: 0 }, { textLayer });
+
+    expect(a?.quote.prefix).toBe("A repeat B");
+    expect(a?.quote.suffix).toBe("C");
+  });
 });

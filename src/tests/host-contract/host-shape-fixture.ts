@@ -22,6 +22,7 @@ export interface HostFixtureOptions {
   includeToolbar?: boolean;
   marginWidthPx?: number;
   fingerprint?: string;
+  rotation?: 0 | 90 | 180 | 270;
 }
 
 export function buildHostFixture(opts: HostFixtureOptions = {}) {
@@ -43,13 +44,16 @@ export function buildHostFixture(opts: HostFixtureOptions = {}) {
     Object.defineProperty(page, "offsetHeight", { value: 800, configurable: true });
     const textLayer = document.createElement("div");
     textLayer.className = "textLayer";
+    // A rendered text layer is non-empty. Tests that exercise placeholder/
+    // unready behavior explicitly clear this content.
+    textLayer.textContent = `fixture page ${i} content`;
     page.appendChild(textLayer);
     viewerEl.appendChild(page);
     pages.push({ el: page, textLayer, pageNumber: i });
   }
   const margin = opts.marginWidthPx ?? 200;
   containerEl.style.width = `${600 + margin * 2}px`;
-  const pdfJsViewer: any = { currentScale: scale, pagesCount: numPages };
+  const pdfJsViewer: any = { currentScale: scale, pagesCount: numPages, pagesRotation: opts.rotation ?? 0 };
   if (opts.fingerprint !== undefined) pdfJsViewer.pdfDocument = { fingerprints: [opts.fingerprint, null] };
   const obsidianViewer = { pdfViewer: pdfJsViewer, dom: { viewerContainerEl: containerEl, viewerEl }, eventBus };
   const child = { pdfViewer: obsidianViewer };

@@ -84,7 +84,7 @@ describe("CardLayoutEngine", () => {
     expect(out.positions.get("pin")!.top).toBe(120);
     expect(out.positions.get("free")!.top).toBe(188); // pin bottom 180 + 8px gap
   });
-  it("keeps cards inside the page when push-down crosses the page bottom", () => {
+  it("keeps pushed-down cards in dense scroll content when they cross the page bottom", () => {
     const out = layoutCards({
       pageHeight: 800, railScrollTop: 0, railViewportHeight: 800,
       entries: [
@@ -94,6 +94,23 @@ describe("CardLayoutEngine", () => {
     });
     expect(out.mode).toBe("dense");
     expect(out.positions.get("a")!.top).toBeGreaterThanOrEqual(0);
-    expect(out.positions.get("b")!.top).toBeLessThanOrEqual(720);
+    expect(out.positions.get("b")!.top).toBe(788);
+    expect(out.contentHeight).toBe(868);
+  });
+  it("keeps dense positions in scroll content so every card remains reachable", () => {
+    const out = layoutCards({
+      pageHeight: 100, railScrollTop: 80, railViewportHeight: 100,
+      entries: [
+        { annotationId: "pin", anchorY: 0, cardHeight: 60, pinTop: 0 },
+        { annotationId: "automatic", anchorY: 10, cardHeight: 80 },
+        { annotationId: "last", anchorY: 20, cardHeight: 80 },
+      ],
+    });
+    expect(out.mode).toBe("dense");
+    expect(out.positions.get("pin")!.top).toBe(0);
+    expect(out.positions.get("automatic")!.top).toBe(68);
+    expect(out.positions.get("last")!.top).toBe(156);
+    expect(out.contentHeight).toBe(236);
+    expect(out.visibleCardIds).toEqual(["automatic", "last"]);
   });
 });

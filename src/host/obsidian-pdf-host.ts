@@ -60,6 +60,16 @@ export function readCurrentScale(h: HostHandles): number {
   return typeof s === "number" && Number.isFinite(s) && s > 0 ? s : 1;
 }
 
+// PDFViewer exposes pagesRotation as a validated 0/90/180/270 property. Keep
+// this defensive because Obsidian owns the viewer instance and may change its
+// private object graph independently of PDF.js.
+export function readPagesRotation(h: HostHandles): 0 | 90 | 180 | 270 | undefined {
+  const rotation = (h.pdfJsViewer as any)?.pagesRotation;
+  return rotation === 0 || rotation === 90 || rotation === 180 || rotation === 270
+    ? rotation
+    : undefined;
+}
+
 // Find a rendered page element by 1-based page number.
 export function findPageEl(h: HostHandles, pageNumber: number): HTMLElement | null {
   return h.viewerEl.querySelector<HTMLElement>(

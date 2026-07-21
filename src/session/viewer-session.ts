@@ -1,6 +1,6 @@
 // src/session/viewer-session.ts
 import type { HostHandles, HostCapabilities } from "src/host/host-typings";
-import { probeHostHandles, readCurrentScale, findPageEl, readPdfFingerprint, readPageCount } from "src/host/obsidian-pdf-host";
+import { probeHostHandles, readCurrentScale, readPagesRotation, findPageEl, readPdfFingerprint, readPageCount } from "src/host/obsidian-pdf-host";
 import { probeCapabilities } from "src/host/host-capabilities";
 import { DisposableScope } from "src/session/disposable-scope";
 import { SelectionSnapshotController } from "src/session/selection-snapshot-controller";
@@ -8,27 +8,54 @@ import { DraftController } from "src/session/draft-controller";
 import { showUndoNotice } from "src/session/undo-notice";
 import { ToolbarController } from "src/toolbar/toolbar-controller";
 import { Notice } from "obsidian";
-import { drawEphemeralMark, clearMarks } from "src/render/mark-renderer";
+import { drawEphemeralMark, clearMarks, setMarkHover } from "src/render/mark-renderer";
 import { buildCard, type CardCallbacks } from "src/render/annotation-card-rail";
-import { drawEphemeralConnector } from "src/render/connector-renderer";
+import { clearPageConnectors, drawEphemeralConnector } from "src/render/connector-renderer";
 import { layoutCards } from "src/render/card-layout-engine";
 import { computeCardRailGeometry } from "src/render/card-drag-geometry";
-import { unionCenter, cleanGeometry, normalizeQuote, type AnchorRect } from "src/domain/pdf-text-anchor";
-import { captureAnchor, resolveAnchor, type ResolveContext, type ResolveHit } from "src/domain/anchor-resolver";
+import { PageCardRailRegistry, type PageCardRailSide } from "src/render/page-card-rail";
+import { unionCenter, cleanGeometry, type AnchorRect } from "src/domain/pdf-text-anchor";
+import {
+  captureAnchor,
+  resolveAnchor,
+  searchTextLayerQuote,
+  type AnchorResolveResult,
+  type ResolveContext,
+  type ResolveHit,
+} from "src/domain/anchor-resolver";
+import { ResolvedAnchorProjection } from "src/session/resolved-anchor-projection";
+import { LayoutInvalidationController, type LayoutObserverState } from "src/session/layout-invalidation-controller";
 import { encodeLocator, decodeLocator } from "src/domain/locator-codec";
 import { ExportModal } from "src/export/export-modal";
 import { MarkdownExportService } from "src/export/markdown-export-service";
 import { hitTestAnnotation } from "src/render/page-projection";
 import { makeT, type Translate } from "src/i18n";
+import { createIcon } from "src/render/icons";
 import type { DurableAnnotationStore } from "src/store/durable-annotation-store";
 import { signatureMismatch } from "src/host/source-signature";
 import type { AnnotationRecordV1, DocumentSignature, MutationResult } from "src/domain/annotation";
+import { annotationElement, annotationElements } from "src/render/annotation-dom";
 
 export type SessionState = "discovered" | "probing" | "attached" | "degraded" | "disposing" | "disposed";
 
 export interface ViewerSessionOptions {
   probeIntervalMs?: number;
   probeTimeoutMs?: number;
+}
+
+export interface ViewerSessionDiagnostics {
+  locatorEncodeAttempts: number;
+  locatorEncodeSuccesses: number;
+  locatorDecodeAttempts: number;
+  locatorDecodeSuccesses: number;
+  quoteResolutions: number;
+  geometryFallbacks: number;
+  unresolvedAnchors: number;
+  scaleEvents: number;
+  resizeInvalidations: number;
+  toolbarSlotState: "ready" | "fallback" | "missing" | "unknown";
+  pageNavigationCapabilityState: "ready" | "missing" | "unknown";
+  layoutObserverState?: "ready" | "missing" | "unknown";
 }
 
 const DEFAULTS = { probeIntervalMs: 200, probeTimeoutMs: 5000 };
@@ -47,19 +74,61 @@ export class ViewerSession {
   private opts: Required<ViewerSessionOptions>;
   private signature: DocumentSignature | null = null;
   private sigWarned = false;
-  unresolvedCount = 0; // diagnostics: incremented when resolveAnchor returns unresolved
+  private diagnosticCounts = {
+    locatorEncodeAttempts: 0,
+    locatorEncodeSuccesses: 0,
+    locatorDecodeAttempts: 0,
+    locatorDecodeSuccesses: 0,
+    quoteResolutions: 0,
+    geometryFallbacks: 0,
+    unresolvedAnchors: 0,
+    scaleEvents: 0,
+    resizeInvalidations: 0,
+  };
+  get unresolvedCount(): number { return this.diagnosticCounts.unresolvedAnchors; }
   private t: Translate | null = null;
   private pendingReconcile = new Set<number>();
+  private pendingConnectorRedraw = new Set<number>();
   private rafId: number | null = null;
   private editingId: string | null = null;
   private hoveredId: string | null = null;
   private draggingId: string | null = null;
+  private activeDragDispose: (() => void) | null = null;
+  private dragGeometryStale = false;
   private draft = new DraftController();
   private toolbar: ToolbarController | null = null;
+  private hintShown = false; // onboarding empty-state hint, once per session
+  private pendingEnterPages = new Map<string, number>();
+  private pendingStitchPages = new Map<string, number>();
+  private resolvedAnchors = new ResolvedAnchorProjection();
+  private resolutionDiagnosticOutcomes = new Map<string, string>();
+  private layoutInvalidation: LayoutInvalidationController | null = null;
+  private layoutObserverState: LayoutObserverState | "unknown" = "unknown";
+  private cardRails: PageCardRailRegistry | null = null;
 
   constructor(private view: any, pdfPath: string, private store: DurableAnnotationStore, opts: ViewerSessionOptions = {}) {
     this.pdfPath = pdfPath;
     this.opts = { ...DEFAULTS, ...opts } as Required<ViewerSessionOptions>;
+  }
+
+  diagnosticsSnapshot(): ViewerSessionDiagnostics {
+    const currentHandles = probeHostHandles(this.view);
+    if (!currentHandles) {
+      return {
+        ...this.diagnosticCounts,
+        toolbarSlotState: "unknown",
+        pageNavigationCapabilityState: "unknown",
+        layoutObserverState: "unknown",
+      };
+    }
+    return {
+      ...this.diagnosticCounts,
+      toolbarSlotState: currentHandles.toolbarSlot ? "ready" : (this.toolbar ? "fallback" : "missing"),
+      // Navigation remains unknown until a real-host-backed adapter establishes
+      // an owning object and page-number contract. Fixtures must not invent it.
+      pageNavigationCapabilityState: "unknown",
+      layoutObserverState: this.layoutObserverState === "disposed" ? "unknown" : this.layoutObserverState,
+    };
   }
 
   attach(): Promise<void> {
@@ -106,10 +175,33 @@ export class ViewerSession {
 
     // spec §7.5: register listeners BEFORE scanning existing pages.
     const bus = h.eventBus as any;
+    this.cardRails = new PageCardRailRegistry(h.viewerContainerEl, gen, (pageNumber) => {
+      if (this.generation !== gen) return;
+      this.scheduleConnectorRedraw(pageNumber);
+    });
+    this.scope.addDispose(() => { this.cardRails?.dispose(); this.cardRails = null; });
+    this.layoutInvalidation = new LayoutInvalidationController({
+      viewerEl: h.viewerEl,
+      containerEl: h.viewerContainerEl,
+      generation: gen,
+      isCurrent: (generation) => this.generation === generation && this.state !== "disposing" && this.state !== "disposed",
+      onInvalidateAll: () => {
+        this.dragGeometryStale = this.draggingId !== null;
+        this.reconcileAllMountedPages();
+      },
+      onInvalidatePage: (pageNumber) => {
+        this.dragGeometryStale = this.draggingId !== null;
+        this.reconcilePage(pageNumber);
+      },
+      onResizeSignal: () => { this.diagnosticCounts.resizeInvalidations++; },
+    });
+    this.layoutObserverState = this.layoutInvalidation.start();
+    this.scope.addDispose(() => { this.layoutInvalidation?.dispose(); this.layoutInvalidation = null; });
     if (bus && typeof bus.on === "function") {
       const onTextLayer = (e: any) => {
         if (this.generation !== gen) return;
-        this.reconcilePage(e?.pageNumber ?? 0);
+        const page = findPageEl(h, e?.pageNumber ?? 0);
+        this.layoutInvalidation?.onTextLayerRendered(e?.pageNumber ?? 0, page);
       };
       bus.on("textlayerrendered", onTextLayer);
       this.scope.addDispose(() => bus.off?.("textlayerrendered", onTextLayer));
@@ -160,16 +252,22 @@ export class ViewerSession {
         const colors = this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name }));
         this.toolbar?.updateT(this.t);
         this.toolbar?.updateColors(colors, this.store.data.settings.defaultColorId);
-        this.reconcileAllVisiblePages();
+        this.reconcileAllMountedPages();
         return;
       }
       if (path !== this.pdfPath) return;
       const pages = new Set<number>();
       for (const ch of changes) {
-        if (ch.deleted) { this.removeAnnotationDom(ch.id); if (ch.page != null) pages.add(ch.page); }
+        if (ch.deleted) { this.removeAnnotationDom(ch.id, { animate: true }); if (ch.page != null) pages.add(ch.page); }
         else {
           const a = this.store.byId(path, ch.id);
-          if (a) pages.add(a.anchor.pageNumber);
+          if (a) {
+            pages.add(a.anchor.pageNumber);
+            if (ch.kind === "created" || ch.kind === "restored") {
+              this.pendingEnterPages.set(ch.id, a.anchor.pageNumber);
+              this.pendingStitchPages.set(ch.id, a.anchor.pageNumber);
+            }
+          }
         }
       }
       pages.forEach((p) => this.reconcilePage(p));
@@ -192,6 +290,39 @@ export class ViewerSession {
     const unsubStatus = this.store.onStatus((s) => this.toolbar?.setStatus(s));
     this.scope.addDispose(unsubStatus);
     this.scope.addDispose(() => { this.toolbar?.dispose(); this.toolbar = null; });
+
+    this.showOnboardingHint();
+  }
+
+  // Empty state = a PDF with zero annotations (critique P1: first-timers had no
+  // way to discover "select text, click a color"). A quiet pill at the top of the
+  // viewer, dismissed by click, by the first annotation, or after 12s.
+  private showOnboardingHint(): void {
+    if (!this.handles || this.hintShown || !this.t) return;
+    if (this.store.byPath(this.pdfPath).length > 0) return;
+    this.hintShown = true;
+    const doc = this.handles.viewerContainerEl.ownerDocument;
+    const hint = doc.createElement("div");
+    hint.className = "rm-onboarding-hint";
+    const text = doc.createElement("span");
+    text.textContent = this.t("hint.text");
+    const close = doc.createElement("button");
+    close.className = "rm-onboarding-hint-close";
+    close.title = this.t("hint.dismiss");
+    close.setAttribute("aria-label", this.t("hint.dismiss"));
+    close.appendChild(createIcon(doc, "x", 12));
+    hint.append(text, close);
+    this.handles.viewerContainerEl.appendChild(hint);
+    const win = doc.defaultView;
+    const timer = win?.setTimeout(() => hint.remove(), 12_000);
+    const dismiss = () => { hint.remove(); if (timer !== undefined) win?.clearTimeout(timer); };
+    close.addEventListener("click", dismiss);
+    this.scope.addDispose(dismiss);
+    // The first annotation means the hint did its job.
+    const unsub = this.store.onChange((path, changes) => {
+      if (path === this.pdfPath && changes.some((c) => !c.deleted)) { dismiss(); unsub(); }
+    });
+    this.scope.addDispose(unsub);
   }
 
   // M0: render annotations from the store for this page.
@@ -200,6 +331,18 @@ export class ViewerSession {
     if (!this.handles || this.state !== "attached") return;
     this.pendingReconcile.add(pageNumber);
     if (this.draggingId) return; // defer re-render during a drag; flushed when it ends
+    this.scheduleReconcileFrame();
+  }
+
+  private scheduleConnectorRedraw(pageNumber: number): void {
+    if (!this.handles || this.state !== "attached") return;
+    if (!this.pendingReconcile.has(pageNumber)) this.pendingConnectorRedraw.add(pageNumber);
+    if (this.draggingId) return;
+    this.scheduleReconcileFrame();
+  }
+
+  private scheduleReconcileFrame(): void {
+    if (!this.handles || this.state !== "attached") return;
     if (this.rafId !== null) return;
     const gen = this.generation;
     const win = this.handles.viewerEl.ownerDocument.defaultView;
@@ -214,14 +357,26 @@ export class ViewerSession {
 
   private flushReconcile(): void {
     const pages = this.pendingReconcile;
+    const connectorPages = this.pendingConnectorRedraw;
     this.pendingReconcile = new Set();
+    this.pendingConnectorRedraw = new Set();
     for (const p of pages) this.renderPage(p);
+    for (const p of connectorPages) {
+      if (!pages.has(p)) this.redrawPageConnectors(p);
+    }
   }
 
   private renderPage(pageNumber: number): void {
     if (!this.handles || this.state !== "attached") return;
+    // Rebuild is replacement, not accumulation. Clearing before looking up the
+    // page also drops hit targets when PDF.js detaches a virtualized page.
+    this.resolvedAnchors.beginPage(this.generation, pageNumber);
     const pageEl = findPageEl(this.handles, pageNumber);
-    if (!pageEl) return;
+    if (!pageEl) {
+      this.cardRails?.removePage(pageNumber);
+      clearPageConnectors(this.handles.viewerContainerEl, pageNumber);
+      return;
+    }
     // sourceSignature guard (spec §10.2): if the PDF at this path was replaced
     // (fingerprint/numPages changed), do not render stale annotations. Checked
     // lazily because the signature may be unavailable at attach time. Marks are
@@ -234,17 +389,17 @@ export class ViewerSession {
     }
     const scale = readCurrentScale(this.handles);
     const container = this.handles.viewerContainerEl;
-    // Clear only this page's marks (per-page, safe). Cards/connectors are deduped
-    // per-annotation-id in their draw functions (shared rail/SVG across pages).
+    // Rebuild only this page. Rail identity and scroll survive while cards and
+    // connector endpoints are fresh projections of the current layout.
     clearMarks(pageEl);
-    // Reset rail overflows from previous dense pages (rails are shared, scoped per page).
-    for (const rail of container.querySelectorAll<HTMLElement>(".rm-card-rail")) {
-      rail.style.overflowY = "";
-      rail.style.maxHeight = "";
-    }
+    this.cardRails?.clearPageCards(pageNumber);
+    clearPageConnectors(container, pageNumber);
 
     const anns = this.store.byPage(this.pdfPath, pageNumber);
-    if (anns.length === 0) return;
+    if (anns.length === 0) {
+      this.cardRails?.removePage(pageNumber);
+      return;
+    }
 
     // Narrow window: hide cards/rails but keep marks per spec §5.4 (H-05).
     // Use offsetWidth directly – getBoundingClientRect is unreliable in jsdom.
@@ -253,9 +408,13 @@ export class ViewerSession {
       : Infinity;
     const narrow = marginPx < 136;
     if (narrow) {
+      this.cardRails?.removePage(pageNumber);
       for (const ann of anns) {
-        const rects = cleanGeometry(ann.anchor.geometry.rects, ann.anchor.geometry.pageWidth, ann.anchor.geometry.pageHeight);
-        drawEphemeralMark(pageEl, rects, ann.colorValueSnapshot, ann.markStyle, scale);
+        this.removeAnnotationDom(ann.id);
+        const resolved = this.resolveAnnotation(ann, pageEl, scale);
+        if (!resolved) continue;
+        this.projectResolvedAnchor(ann, resolved);
+        drawEphemeralMark(pageEl, resolved.rects, ann.colorValueSnapshot, ann.markStyle, scale, ann.id);
       }
       return;
     }
@@ -268,31 +427,37 @@ export class ViewerSession {
     const offsetY = pageRect.top - containerRect.top + container.scrollTop;
     const containerWidth = container.offsetWidth || containerRect.width || parseFloat(container.style.width) || 0;
     const pageWidth = pageEl.offsetWidth || pageRect.width || anns[0]?.anchor.geometry.pageWidth * scale || 0;
+    const viewportLeft = container.scrollLeft;
+    const viewportRight = viewportLeft + containerWidth;
+    const pageHeight = pageEl.offsetHeight || pageRect.height;
 
     // First pass: draw marks, create cards (unpositioned), group by side.
-    type Entry = { ann: AnnotationRecordV1; card: HTMLElement; anchorY: number; markCenterY: number; markEdgeX: number; pinTop?: number };
+    type Entry = { ann: AnnotationRecordV1; card: HTMLElement; anchorY: number; pinTop?: number };
     const bySide: Record<"left" | "right", Entry[]> = { left: [], right: [] };
     for (const ann of anns) {
       // Resolve the anchor against the live page (locator -> quote -> geometry).
       // Unresolved annotations are not drawn (spec §9.6, H-03); remove any stale
       // card/connector left from a previous render.
-      const rects = this.resolveAnnotation(ann, pageEl, scale);
-      if (!rects) { this.removeAnnotationDom(ann.id); continue; }
-      drawEphemeralMark(pageEl, rects, ann.colorValueSnapshot, ann.markStyle, scale);
+      const resolved = this.resolveAnnotation(ann, pageEl, scale);
+      if (!resolved) { this.removeAnnotationDom(ann.id); continue; }
+      const rects = resolved.rects;
+      drawEphemeralMark(pageEl, rects, ann.colorValueSnapshot, ann.markStyle, scale, ann.id);
+      // Marks are redrawn wholesale - re-apply the hover lift, same as the
+      // connector's `selected` flag below (B: taut thread survives re-render).
+      if (this.hoveredId === ann.id) setMarkHover(pageEl, ann.id, true);
       const first = rects[0];
-      const side: "left" | "right" = unionCenter(rects).x < ann.anchor.geometry.pageWidth / 2 ? "left" : "right";
+      const side: "left" | "right" = unionCenter(rects).x < pageWidth / (2 * scale) ? "left" : "right";
+      this.projectResolvedAnchor(ann, resolved, side);
       const anchorY = (first.y + first.height / 2) * scale;
-      const markCenterY = offsetY + anchorY;
-      const railClass = side === "left" ? "rm-card-rail-left" : "rm-card-rail-right";
-      let rail = container.querySelector<HTMLElement>(`.${railClass}`);
-      if (!rail) {
-        rail = container.ownerDocument.createElement("div");
-        rail.className = `rm-card-rail ${railClass}`;
-        container.appendChild(rail);
-      }
+      const railLeft = side === "left" ? viewportLeft : offsetX + pageWidth;
+      const railRight = side === "left" ? offsetX : viewportRight;
+      const rail = this.cardRails?.ensure({
+        pageNumber, pageEl, side, top: offsetY, height: pageHeight,
+        left: railLeft, width: Math.max(0, railRight - railLeft),
+      });
+      if (!rail) continue;
       const isEditing = this.editingId === ann.id;
-      const quoteText = ann.anchor.quote.exact;
-      const quote = quoteText.length > 60 ? quoteText.slice(0, 60) + "…" : quoteText;
+      const quote = ann.anchor.quote.exact;
       const horizontal = computeCardRailGeometry({
         side,
         containerLeft: container.scrollLeft,
@@ -301,56 +466,108 @@ export class ViewerSession {
         pageRight: offsetX + pageWidth,
         storedX: ann.cardPosition?.x,
       });
-      const card = buildCard(rail, {
-        id: ann.id, quote, comment: ann.comment, color: ann.colorValueSnapshot,
+      const card = buildCard(rail.element, {
+        id: ann.id, quote, comment: ann.comment, color: ann.colorValueSnapshot, colorId: ann.colorIdSnapshot,
         colors: this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name })),
         markStyle: ann.markStyle,
-        side, anchorY: markCenterY, editing: isEditing,
+        side, anchorY, editing: isEditing,
         draftValue: isEditing ? this.draft.peek(ann.id)?.value : undefined,
-        cardLeft: horizontal.x,
+        cardLeft: rail.containerXToLocal(horizontal.x),
         cardWidth: horizontal.cardWidth,
       }, this.cardCallbacks(), this.t ?? makeT("auto", "en"));
-      const markEdgeX = side === "left" ? offsetX + first.x * scale : offsetX + (first.x + first.width) * scale;
+      if (this.pendingEnterPages.get(ann.id) === pageNumber) {
+        this.applyCardMotion(card, "rm-card-enter");
+        this.pendingEnterPages.delete(ann.id);
+      }
       const pinTop = ann.cardPosition ? ann.cardPosition.y * scale : undefined;
-      bySide[side].push({ ann, card, anchorY, markCenterY, markEdgeX, pinTop });
+      bySide[side].push({ ann, card, anchorY, pinTop });
     }
 
     // Second pass: layout each side (push-down to avoid overlap), apply positions, draw connectors.
-    const pageHeight = pageEl.offsetHeight || pageRect.height;
     for (const side of ["left", "right"] as const) {
       const group = bySide[side];
       if (group.length === 0) continue;
       const out = layoutCards({
-        pageHeight, railScrollTop: 0, railViewportHeight: pageHeight,
+        pageHeight, railScrollTop: this.cardRails?.get(pageNumber, side)?.element.scrollTop ?? 0, railViewportHeight: pageHeight,
         entries: group.map((g) => ({ annotationId: g.ann.id, anchorY: g.anchorY, cardHeight: g.card.offsetHeight || 40, pinTop: g.pinTop })),
       });
-      const rail = container.querySelector<HTMLElement>(side === "left" ? ".rm-card-rail-left" : ".rm-card-rail-right");
-      // Dense mode: enable scrolling so cards don't overflow the page (H-05).
-      if (out.mode === "dense" && rail) {
-        rail.style.overflowY = "auto";
-        rail.style.maxHeight = `${pageHeight}px`;
-      }
-      const railLeft = rail?.offsetLeft ?? 0;
-      const visibleSet = new Set(out.visibleCardIds);
+      const rail = this.cardRails?.get(pageNumber, side);
+      rail?.setLayout(out.mode, out.contentHeight);
       for (const g of group) {
         const pos = out.positions.get(g.ann.id);
-        if (pos) g.card.style.top = `${offsetY + pos.top}px`;
-        // Skip connector for cards outside the visible viewport (H-05).
-        if (!visibleSet.has(g.ann.id)) continue;
-        const cardHeight = g.card.offsetHeight || 40;
-        const cardCenterY = offsetY + (pos?.top ?? g.anchorY) + cardHeight / 2;
-        const cardEdgeX = side === "left" ? railLeft + g.card.offsetLeft + g.card.offsetWidth : railLeft + g.card.offsetLeft;
-        drawEphemeralConnector(container, { x1: g.markEdgeX, y1: g.markCenterY, x2: cardEdgeX, y2: cardCenterY, color: g.ann.colorValueSnapshot, id: g.ann.id, selected: this.hoveredId === g.ann.id });
+        if (pos) g.card.style.top = `${pos.top}px`;
       }
+    }
+    this.cardRails?.prunePage(pageNumber, new Set(
+      (["left", "right"] as const).filter((side) => bySide[side].length > 0),
+    ));
+    this.redrawPageConnectors(pageNumber);
+  }
+
+  private redrawPageConnectors(pageNumber: number): void {
+    if (!this.handles || this.state !== "attached") return;
+    const container = this.handles.viewerContainerEl;
+    clearPageConnectors(container, pageNumber);
+    const pageEl = findPageEl(this.handles, pageNumber);
+    if (!pageEl) return;
+    const scale = readCurrentScale(this.handles);
+    const containerRect = container.getBoundingClientRect();
+    const pageRect = pageEl.getBoundingClientRect();
+    const offsetX = pageRect.left - containerRect.left + container.scrollLeft;
+    const offsetY = pageRect.top - containerRect.top + container.scrollTop;
+    const pageHeight = pageEl.offsetHeight || pageRect.height;
+    const pageWidth = pageEl.offsetWidth || pageRect.width;
+
+    for (const ann of this.store.byPage(this.pdfPath, pageNumber)) {
+      const resolved = this.resolvedAnchors.get(this.generation, pageNumber, ann.id);
+      if (!resolved || resolved.rects.length === 0) continue;
+      const first = resolved.rects[0];
+      const side = resolved.side;
+      if (!side) continue;
+      const rail = this.cardRails?.get(pageNumber, side);
+      if (!rail) continue;
+      const card = annotationElement<HTMLElement>(rail.element, ".rm-card", ann.id);
+      if (!card) continue;
+      const cardTop = Number.parseFloat(card.style.top) || 0;
+      const cardHeight = card.offsetHeight || 40;
+      const visibleTop = cardTop - rail.element.scrollTop;
+      if (visibleTop + cardHeight < 0 || visibleTop > pageHeight) continue;
+      const localLeft = Number.parseFloat(card.style.left) || 0;
+      const cardWidth = card.offsetWidth || Number.parseFloat(card.style.width) || 40;
+      const markEdgeX = side === "left"
+        ? offsetX + first.x * scale
+        : offsetX + (first.x + first.width) * scale;
+      const cardEdgeX = rail.localXToContainer(side === "left" ? localLeft + cardWidth : localLeft);
+      const markCenterY = offsetY + (first.y + first.height / 2) * scale;
+      const cardCenterY = offsetY + visibleTop + cardHeight / 2;
+      const stitching = this.pendingStitchPages.get(ann.id) === pageNumber;
+      drawEphemeralConnector(container, {
+        x1: markEdgeX, y1: markCenterY, x2: cardEdgeX, y2: cardCenterY,
+        color: ann.colorValueSnapshot, id: ann.id, pageNumber, side,
+        selected: this.hoveredId === ann.id,
+        stitching,
+      });
+      if (stitching) this.pendingStitchPages.delete(ann.id);
     }
   }
 
   // Remove a deleted annotation's card + connector from the DOM (marks are cleared by renderPage).
-  private removeAnnotationDom(id: string): void {
+  // With { animate: true } the card plays a short exit fade first (deletion feedback);
+  // reconcile-driven clears stay instant.
+  private removeAnnotationDom(id: string, opts?: { animate?: boolean }): void {
     if (!this.handles) return;
     const container = this.handles.viewerContainerEl;
-    container.querySelectorAll(`.rm-card[data-annotation-id="${id}"]`).forEach((n) => n.remove());
-    container.querySelectorAll(`g.rm-connector[data-annotation-id="${id}"]`).forEach((n) => n.remove());
+    annotationElements<HTMLElement>(container, ".rm-card", id).forEach((n) => {
+      if (!opts?.animate) { n.remove(); return; }
+      if (n.classList.contains("rm-card-exit")) return; // already exiting (delete fires twice: change event + caller)
+      const win = n.ownerDocument.defaultView;
+      if (win?.matchMedia?.("(prefers-reduced-motion: reduce)").matches) { n.remove(); return; }
+      n.classList.add("rm-card-exit");
+      n.addEventListener("animationend", () => n.remove(), { once: true });
+      // Backstop in case animationend is swallowed (element detached mid-animation).
+      win?.setTimeout(() => n.remove(), 400);
+    });
+    annotationElements(container, "g.rm-connector", id).forEach((n) => n.remove());
   }
 
   hasSelection(): boolean { return this.sel.current() !== null; }
@@ -365,15 +582,19 @@ export class ViewerSession {
     const pageEl = findPageEl(this.handles, snap.pageNumber);
     if (!pageEl) return { ok: false, reason: "page not found" };
     const scale = readCurrentScale(this.handles);
-    const dims = { pageWidth: pageEl.offsetWidth / scale, pageHeight: pageEl.offsetHeight / scale, rotation: 0 as const };
+    const rotation = readPagesRotation(this.handles);
+    if (rotation === undefined || rotation !== 0) return { ok: false, reason: "page rotation unsupported" };
+    const dims = { pageWidth: pageEl.offsetWidth / scale, pageHeight: pageEl.offsetHeight / scale, rotation };
     // Capture a text-layer locator + quote context so the anchor can be resolved
     // (not just re-painted) on reopen/reflow (H-03). locator is best-effort: if
     // the selection does not land on tracked text items, it is omitted.
     const textLayer = pageEl.querySelector<HTMLElement>(".textLayer");
+    this.diagnosticCounts.locatorEncodeAttempts++;
     const locator = textLayer
       ? (encodeLocator(snap.range.startContainer, snap.range.startOffset, snap.range.endContainer, snap.range.endOffset, textLayer) ?? undefined)
       : undefined;
-    const ctx = { locator, ...this.extractQuoteContext(textLayer, normalizeQuote(snap.selectedText)) };
+    if (locator) this.diagnosticCounts.locatorEncodeSuccesses++;
+    const ctx = { locator, textLayer };
     const anchor = captureAnchor(snap, pageEl, scale, dims, ctx);
     if (!anchor) return { ok: false, reason: "anchor capture failed" };
     const colors = this.store.data.settings.colors;
@@ -389,12 +610,12 @@ export class ViewerSession {
       this.sel.clear();
       // Underline is a "mark + immediately comment" action (spec §4.3): enter
       // edit mode so the user can type without a second click (H-09).
-      if (markStyle === "underline" && result.ok) {
+      if (markStyle === "underline") {
         const created = result.annotation;
         this.editingId = created.id;
         this.draft.begin(created.id, created.revision, "");
-        this.reconcilePage(snap.pageNumber);
       }
+      this.reconcilePage(snap.pageNumber);
     }
     return result;
   }
@@ -406,7 +627,8 @@ export class ViewerSession {
     const doc = this.store.data.documents[this.pdfPath];
     if (!doc || annotations.length === 0) { new Notice(this.t!("notice.noAnnotations")); return; }
     const service = new MarkdownExportService(app);
-    new ExportModal(app, this.pdfPath, annotations, { documentId: doc.documentId, documentRevision: doc.revision }, service, this.t!).open();
+    new ExportModal(app, this.pdfPath, annotations, { documentId: doc.documentId, documentRevision: doc.revision }, service, this.t!,
+      () => this.toolbar?.pulseExport()).open();
   }
 
   // Click on a rendered mark -> hit-test in page-css coords -> flash the card (spec §12.2).
@@ -420,14 +642,14 @@ export class ViewerSession {
     if (!pageEl) return;
     const pageNumber = parseInt(pageEl.dataset.pageNumber ?? "", 10);
     if (!Number.isFinite(pageNumber)) return;
-    const anns = this.store.byPage(this.pdfPath, pageNumber);
-    if (anns.length === 0) return;
+    const entries = this.resolvedAnchors.hitEntries(this.generation, pageNumber);
+    if (entries.length === 0) return;
     const scale = readCurrentScale(this.handles);
     const pageRect = pageEl.getBoundingClientRect();
     const px = (e.clientX - pageRect.left) / scale;
     const py = (e.clientY - pageRect.top) / scale;
     const id = hitTestAnnotation(
-      anns.map((a) => ({ id: a.id, rects: a.anchor.geometry.rects })),
+      entries,
       px, py,
     );
     if (id) this.flashCard(id);
@@ -436,9 +658,9 @@ export class ViewerSession {
   private flashCard(id: string): void {
     if (!this.handles) return;
     const container = this.handles.viewerContainerEl;
-    const card = container.querySelector<HTMLElement>(`.rm-card[data-annotation-id="${id}"]`);
+    const card = annotationElement<HTMLElement>(container, ".rm-card", id);
     if (!card) return;
-    const connector = container.querySelector<SVGGElement>(`g.rm-connector[data-annotation-id="${id}"]`);
+    const connector = annotationElement<SVGGElement>(container, "g.rm-connector", id);
     card.classList.add("rm-card-linked");
     connector?.classList.add("rm-connector-active");
     const win = this.handles.viewerEl.ownerDocument.defaultView;
@@ -454,11 +676,17 @@ export class ViewerSession {
   private hoverCard(id: string | null): void {
     if (!this.handles) return;
     if (this.hoveredId === id) return;
+    const prev = this.hoveredId;
     const container = this.handles.viewerContainerEl;
     container.querySelectorAll(".rm-connector-selected").forEach((n) => n.classList.remove("rm-connector-selected"));
+    // B-direction: lift the source highlight too ("the thread is taut").
+    if (prev) {
+      annotationElements<HTMLElement>(container, ".rm-mark-group", prev).forEach((n) => n.classList.remove("rm-mark-hover"));
+    }
     this.hoveredId = id;
     if (id) {
-      container.querySelector(`g.rm-connector[data-annotation-id="${id}"]`)?.classList.add("rm-connector-selected");
+      annotationElement(container, "g.rm-connector", id)?.classList.add("rm-connector-selected");
+      annotationElements<HTMLElement>(container, ".rm-mark-group", id).forEach((n) => n.classList.add("rm-mark-hover"));
     }
   }
 
@@ -468,6 +696,7 @@ export class ViewerSession {
   private beginDrag(id: string, e: PointerEvent, card: HTMLElement): void {
     if (!this.handles) return;
     if (e.button !== 0) return; // primary button only
+    this.activeDragDispose?.();
     const ann = this.store.byId(this.pdfPath, id);
     if (!ann) return;
     const pageEl = findPageEl(this.handles, ann.anchor.pageNumber);
@@ -488,19 +717,23 @@ export class ViewerSession {
     const startLeft = parseFloat(card.style.left) || 0;
     const startX = e.clientX;
     const side = card.closest(".rm-card-rail-left") ? "left" : "right";
+    const rail = this.cardRails?.get(ann.anchor.pageNumber, side);
+    if (!rail) return;
     const horizontal = computeCardRailGeometry({
       side,
       containerLeft: container.scrollLeft,
       containerWidth: containerRect.width || container.offsetWidth || parseFloat(container.style.width) || 0,
       pageLeft: pageRect.left - containerRect.left + container.scrollLeft,
       pageRight: pageRect.right - containerRect.left + container.scrollLeft,
-      storedX: startLeft,
+      storedX: rail.localXToContainer(startLeft),
       cardWidth,
     });
     const baseRevision = ann.revision;
+    const dragGeneration = this.generation;
     const grip = card.querySelector<HTMLElement>(".rm-card-grip") ?? card;
     let moved = false;
     this.draggingId = id;
+    this.dragGeometryStale = false;
     card.classList.add("rm-card-dragging");
     try { grip.setPointerCapture(e.pointerId); } catch { /* pointer already released */ }
     const onMove = (ev: PointerEvent) => {
@@ -509,27 +742,64 @@ export class ViewerSession {
       if (Math.abs(dy) > 1 || Math.abs(dx) > 1) moved = true;
       const nextTopVp = Math.max(minVp, Math.min(startCardTopVp + dy, maxVp));
       card.style.top = `${startTop + (nextTopVp - startCardTopVp)}px`;
-      const nextLeft = Math.max(horizontal.minX, Math.min(startLeft + dx, horizontal.maxX));
-      card.style.left = `${nextLeft}px`;
+      const nextContainerLeft = Math.max(horizontal.minX, Math.min(rail.localXToContainer(startLeft) + dx, horizontal.maxX));
+      card.style.left = `${rail.containerXToLocal(nextContainerLeft)}px`;
     };
-    const onUp = () => {
+    let finished = false;
+    const finish = (cancelled: boolean) => {
+      if (finished) return;
+      finished = true;
       grip.removeEventListener("pointermove", onMove);
       grip.removeEventListener("pointerup", onUp);
-      grip.removeEventListener("pointercancel", onUp);
+      grip.removeEventListener("pointercancel", onCancel);
       try { grip.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
       card.classList.remove("rm-card-dragging");
-      this.draggingId = null;
+      if (this.draggingId === id) this.draggingId = null;
+      if (this.activeDragDispose === cancelDrag) this.activeDragDispose = null;
+      const stale = this.dragGeometryStale;
+      this.dragGeometryStale = false;
+      if (this.generation !== dragGeneration || this.state === "disposing" || this.state === "disposed") return;
       // Flush any re-renders deferred during the drag.
       if (this.pendingReconcile.size > 0) this.reconcilePage([...this.pendingReconcile][0]);
-      if (!moved) return; // a click, not a drag - let dblclick handle reset
-      const finalRect = card.getBoundingClientRect();
-      const y = (finalRect.top - pageRect.top) / scale; // page-relative, unscaled (zoom-stable)
-      const x = parseFloat(card.style.left) || 0;        // viewer-container content px (zoom-stable)
+      if (cancelled || stale || !moved) return;
+      const y = (parseFloat(card.style.top) || 0) / scale; // rail/page-local -> page-css-v1
+      const x = rail.localXToContainer(parseFloat(card.style.left) || 0); // durable container-content x
       this.store.update(this.pdfPath, id, { cardPosition: { space: "page-css-v1", y, x } }, baseRevision);
+      // Settle pulse on the (rebuilt) card: a 180ms 1.02→1 scale acknowledges
+      // "position saved" without shadows or movement (animate pass).
+      this.pulseCard(id, "rm-card-settle");
     };
+    const onUp = () => finish(false);
+    const onCancel = () => finish(true);
+    const cancelDrag = () => finish(true);
+    this.activeDragDispose = cancelDrag;
     grip.addEventListener("pointermove", onMove);
     grip.addEventListener("pointerup", onUp);
-    grip.addEventListener("pointercancel", onUp);
+    grip.addEventListener("pointercancel", onCancel);
+  }
+
+  // One-shot CSS class on the (possibly rebuilt) card: class in, removed at animationend.
+  private pulseCard(id: string, cls: string): void {
+    if (!this.handles) return;
+    const win = this.handles.viewerContainerEl.ownerDocument.defaultView;
+    win?.requestAnimationFrame(() => {
+      const card = this.handles ? annotationElement<HTMLElement>(this.handles.viewerContainerEl, ".rm-card", id) : null;
+      if (!card) return;
+      this.applyCardMotion(card, cls);
+    });
+  }
+
+  private applyCardMotion(card: HTMLElement, cls: string): void {
+    const win = card.ownerDocument.defaultView;
+    if (!win || win.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    card.classList.add(cls);
+    let timer: number | undefined;
+    const cleanup = () => {
+      card.classList.remove(cls);
+      if (timer !== undefined) win.clearTimeout(timer);
+    };
+    card.addEventListener("animationend", cleanup, { once: true });
+    timer = win.setTimeout(cleanup, 1000);
   }
 
   // Clear a user-dragged position: return the card to auto-layout.
@@ -568,42 +838,83 @@ export class ViewerSession {
     return (this.t ?? makeT("auto", "en"))(key, vars);
   }
 
-  // Extract up to 16 chars of context around the quote in the page text layer,
-  // to disambiguate repeated quotes on resolve (spec §9.5).
-  private extractQuoteContext(textLayer: HTMLElement | null, exact: string): { prefix?: string; suffix?: string } {
-    if (!textLayer) return {};
-    const full = normalizeQuote(textLayer.textContent ?? "");
-    const idx = full.indexOf(exact);
-    if (idx < 0) return {};
-    const prefix = idx > 0 ? full.slice(Math.max(0, idx - 16), idx) : undefined;
-    const suffixEnd = idx + exact.length;
-    const suffix = suffixEnd < full.length ? full.slice(suffixEnd, suffixEnd + 16) : undefined;
-    return { prefix: prefix || undefined, suffix: suffix || undefined };
-  }
-
   // Resolve an annotation's anchor against the live page. Returns the rects to
   // draw, or null when unresolved (caller skips drawing - spec §9.6, H-03).
-  private resolveAnnotation(ann: AnnotationRecordV1, pageEl: HTMLElement, scale: number): AnchorRect[] | null {
-    const dims = { pageWidth: pageEl.offsetWidth / scale, pageHeight: pageEl.offsetHeight / scale, rotation: 0 as const };
+  private resolveAnnotation(
+    ann: AnnotationRecordV1,
+    pageEl: HTMLElement,
+    scale: number,
+  ): Extract<AnchorResolveResult, { status: "resolved" }> | null {
+    const liveRotation = this.handles ? readPagesRotation(this.handles) : undefined;
+    // PDFViewer's pagesRotation is the only currently verified rotation source.
+    // Unknown and nonzero values fail closed until rotated coordinate projection
+    // has its own tested implementation.
+    if (liveRotation === undefined || liveRotation !== 0 || ann.anchor.geometry.rotation !== liveRotation) {
+      this.recordResolutionDiagnostics(ann, "unresolved:rotation-unsupported", false, false);
+      return null;
+    }
+    const dims = { pageWidth: pageEl.offsetWidth / scale, pageHeight: pageEl.offsetHeight / scale, rotation: liveRotation };
     const textLayer = pageEl.querySelector<HTMLElement>(".textLayer");
+    let locatorAttempted = false;
+    let locatorDecoded = false;
+    if (!textLayer || !(textLayer.textContent ?? "").trim()) {
+      this.recordResolutionDiagnostics(ann, "unresolved:text-layer-unavailable", locatorAttempted, locatorDecoded);
+      return null;
+    }
     const ctx: ResolveContext = {
       findRangeByLocator: (loc) => {
-        if (!textLayer || !loc) return null;
+        locatorAttempted = true;
+        if (!loc) return null;
         const range = decodeLocator(loc, textLayer);
         if (!range) return null;
+        locatorDecoded = true;
         return this.rangeToHit(range, pageEl, scale, dims);
       },
-      searchPageText: (exact) => {
-        if (!textLayer) return null;
-        const range = this.findTextRange(textLayer, exact);
-        if (!range) return null;
-        return this.rangeToHit(range, pageEl, scale, dims);
-      },
+      searchPageText: (exact, prefix, suffix) => searchTextLayerQuote(
+        textLayer,
+        exact,
+        prefix,
+        suffix,
+        (range) => this.rangeToHit(range, pageEl, scale, dims),
+      ),
       pageDims: dims,
     };
     const result = resolveAnchor(ann.anchor, ctx);
-    if (result.status === "unresolved") { this.unresolvedCount++; return null; }
-    return result.rects;
+    const outcome = result.status === "resolved" ? result.method : `unresolved:${result.reason}`;
+    this.recordResolutionDiagnostics(ann, outcome, locatorAttempted, locatorDecoded);
+    return result.status === "resolved" ? result : null;
+  }
+
+  private projectResolvedAnchor(
+    ann: AnnotationRecordV1,
+    result: Extract<AnchorResolveResult, { status: "resolved" }>,
+    side?: PageCardRailSide,
+  ): void {
+    this.resolvedAnchors.set({
+      annotationId: ann.id,
+      pageNumber: ann.anchor.pageNumber,
+      generation: this.generation,
+      rects: result.rects,
+      method: result.method,
+      side,
+    });
+  }
+
+  private recordResolutionDiagnostics(
+    ann: AnnotationRecordV1,
+    outcome: string,
+    locatorAttempted: boolean,
+    locatorDecoded: boolean,
+  ): void {
+    const key = `${this.generation}:${ann.anchor.pageNumber}:${ann.id}`;
+    const revisionOutcome = `${ann.revision}:${outcome}`;
+    if (this.resolutionDiagnosticOutcomes.get(key) === revisionOutcome) return;
+    this.resolutionDiagnosticOutcomes.set(key, revisionOutcome);
+    if (locatorAttempted) this.diagnosticCounts.locatorDecodeAttempts++;
+    if (locatorDecoded) this.diagnosticCounts.locatorDecodeSuccesses++;
+    if (outcome === "quote") this.diagnosticCounts.quoteResolutions++;
+    else if (outcome === "geometry") this.diagnosticCounts.geometryFallbacks++;
+    else if (outcome.startsWith("unresolved:")) this.diagnosticCounts.unresolvedAnchors++;
   }
 
   private rangeToHit(range: Range, pageEl: HTMLElement, scale: number, dims: { pageWidth: number; pageHeight: number }): ResolveHit | null {
@@ -618,34 +929,7 @@ export class ViewerSession {
     return cleaned.length > 0 ? { range, rects: cleaned } : null;
   }
 
-  // Find the first occurrence of `exact` in the text layer and build a Range.
-  private findTextRange(textLayer: HTMLElement, exact: string): Range | null {
-    const doc = textLayer.ownerDocument;
-    const walker = doc.createTreeWalker(textLayer, NodeFilter.SHOW_TEXT);
-    const chunks: { node: Text; start: number }[] = [];
-    let full = "";
-    let n: Node | null;
-    while ((n = walker.nextNode())) {
-      chunks.push({ node: n as Text, start: full.length });
-      full += n.textContent ?? "";
-    }
-    const idx = full.indexOf(exact);
-    if (idx < 0) return null;
-    const end = idx + exact.length;
-    let startNode: Text | null = null, startOffset = 0, endNode: Text | null = null, endOffset = 0;
-    for (const c of chunks) {
-      const cEnd = c.start + (c.node.textContent?.length ?? 0);
-      if (!startNode && cEnd > idx) { startNode = c.node; startOffset = idx - c.start; }
-      if (cEnd >= end) { endNode = c.node; endOffset = end - c.start; break; }
-    }
-    if (!startNode || !endNode) return null;
-    const range = doc.createRange();
-    range.setStart(startNode, Math.max(0, startOffset));
-    range.setEnd(endNode, Math.max(0, endOffset));
-    return range;
-  }
-
-  private reconcileAllVisiblePages(): void {
+  private reconcileAllMountedPages(): void {
     if (!this.handles) return;
     this.handles.viewerEl.querySelectorAll<HTMLElement>(".page[data-page-number]").forEach((p) => {
       const n = parseInt(p.dataset.pageNumber ?? "", 10);
@@ -700,6 +984,8 @@ export class ViewerSession {
         if (result.ok) {
           this.editingId = null;
           this.draft.cancel(id);
+          // Quiet "saved" acknowledgment: a 600ms outline pulse on the rebuilt card.
+          this.pulseCard(id, "rm-card-saved");
         } else {
           // Conflict: keep the draft (and edit mode) so the user can retry.
           this.draft.update(id, value);
@@ -730,7 +1016,7 @@ export class ViewerSession {
         const documentId = this.store.data.documents[this.pdfPath]?.documentId;
         const result = this.store.delete(this.pdfPath, id);
         if (result.ok) {
-          this.removeAnnotationDom(id);
+          this.removeAnnotationDom(id, { animate: true }); // exit fade; guarded against the change-event double-fire
           this.reconcilePage(page); // clear mark + redraw remaining
           showUndoNotice(this.t!("notice.deleted"), this.t!("notice.undo"), () => {
             const sig = this.resolveSignature();
@@ -753,14 +1039,17 @@ export class ViewerSession {
     if (this.state === "disposed") return;
     this.state = "disposing";
     this.generation++;
+    this.activeDragDispose?.();
+    this.activeDragDispose = null;
     if (this.probeTimer) clearTimeout(this.probeTimer);
     if (this.rafId !== null && this.handles) {
       this.handles.viewerEl.ownerDocument.defaultView?.cancelAnimationFrame(this.rafId);
       this.rafId = null;
     }
+    this.pendingReconcile.clear();
+    this.pendingConnectorRedraw.clear();
     if (this.handles) {
-      this.handles.viewerContainerEl.querySelector(".rm-card-rail-left")?.remove();
-      this.handles.viewerContainerEl.querySelector(".rm-card-rail-right")?.remove();
+      this.handles.viewerContainerEl.querySelectorAll(".rm-card-rail").forEach((rail) => rail.remove());
       this.handles.viewerContainerEl.querySelector(".rm-connector-layer")?.remove();
       this.handles.viewerEl.querySelectorAll(".rm-mark-layer").forEach((n) => n.remove());
     }
@@ -772,6 +1061,10 @@ export class ViewerSession {
     }
     this.sel.dispose();
     this.draft.dispose();
+    this.pendingEnterPages.clear();
+    this.pendingStitchPages.clear();
+    this.resolvedAnchors.clear();
+    this.resolutionDiagnosticOutcomes.clear();
     this.scope.disposeAll();
     this.state = "disposed";
   }

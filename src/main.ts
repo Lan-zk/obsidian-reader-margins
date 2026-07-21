@@ -1,8 +1,21 @@
-import { Plugin, Notice } from "obsidian";
-import { DurableAnnotationStore } from "src/store/durable-annotation-store";
+import { Plugin, Notice, TFile, type TAbstractFile } from "obsidian";
+import { DurableAnnotationStore, type DocumentPathMove, type RekeyDocumentPathsResult } from "src/store/durable-annotation-store";
 import { PdfViewManager } from "src/session/pdf-view-manager";
 import { ReaderMarginsSettingsTab } from "src/settings/settings-tab";
-import { DiagnosticsReporter } from "src/diagnostics/diagnostics-reporter";
+import { aggregateSessionDiagnostics, DiagnosticsReporter } from "src/diagnostics/diagnostics-reporter";
+import { makeT } from "src/i18n";
+
+export function collectStoredPathMoves(
+  storedPaths: readonly string[],
+  oldFolderPath: string,
+  newFolderPath: string,
+): DocumentPathMove[] {
+  if (!oldFolderPath || oldFolderPath === newFolderPath) return [];
+  const prefix = `${oldFolderPath}/`;
+  return storedPaths
+    .filter((path) => path.startsWith(prefix))
+    .map((oldPath) => ({ oldPath, newPath: `${newFolderPath}/${oldPath.slice(prefix.length)}` }));
+}
 
 export default class ReaderMarginsPlugin extends Plugin {
   store!: DurableAnnotationStore;
@@ -27,17 +40,48 @@ export default class ReaderMarginsPlugin extends Plugin {
     if (state === "future" || state === "invalid") {
       new Notice(`Reader Margins: ${state} data.json; annotations disabled to prevent overwrite.`, 10000);
     }
-    this.viewManager = new PdfViewManager(this.store, () => {
-      this.diagnostics.set("sessionCount", this.viewManager.sessionCount);
-      let unresolved = 0; let disposers = 0;
-      for (const s of this.viewManager.allSessions()) { unresolved += s.unresolvedCount; disposers += s.disposerCount; }
-      this.diagnostics.set("totalUnresolved", unresolved);
-      this.diagnostics.set("totalDisposerCount", disposers);
-    });
+    this.viewManager = new PdfViewManager(this.store);
+    this.diagnostics.provide("sessionDiagnostics", () => aggregateSessionDiagnostics(this.viewManager.allSessions()));
+    // Register before start(): start() performs immediate view discovery. A
+    // rename must be able to rekey durable paths and invalidate old sessions
+    // before any newly discovered view can bind annotations by its new path.
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.onVaultRename(file, oldPath)));
     this.viewManager.start(this);
     this.addSettingTab(new ReaderMarginsSettingsTab(this.app, this));
     this.registerCommands();
     this.register(() => { this.viewManager.stop(); this.store.flushBestEffort(); });
+  }
+
+  private onVaultRename(file: TAbstractFile, oldPath: string): void {
+    let moves: DocumentPathMove[];
+    if (file instanceof TFile) {
+      moves = [{ oldPath, newPath: file.path }];
+    } else if (Array.isArray((file as TAbstractFile & { children?: unknown }).children)) {
+      // TFolder is identified by its documented children collection. Unknown
+      // TAbstractFile shapes fail closed below instead of guessing whether a
+      // prefix rewrite is safe.
+      moves = collectStoredPathMoves(
+        [...this.store.documentPaths(), ...this.viewManager.sessionPaths()],
+        oldPath,
+        file.path,
+      );
+    } else {
+      new Notice(this.renameT()("notice.rename.unsupported"), 8000);
+      return;
+    }
+
+    this.viewManager.prepareForDocumentMoves(moves);
+    const result = this.store.rekeyDocumentPaths(moves);
+    if (!result.ok) new Notice(this.renameFailureMessage(result), 8000);
+  }
+
+  private renameFailureMessage(result: Extract<RekeyDocumentPathsResult, { ok: false }>): string {
+    const key = result.reason === "readonly" ? "notice.rename.readonly" : "notice.rename.conflict";
+    return this.renameT()(key);
+  }
+
+  private renameT() {
+    return makeT(this.store.data.settings.language, (this.app as any).locale ?? "en");
   }
 
   private registerCommands() {

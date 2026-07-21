@@ -40,7 +40,7 @@ export class ToolbarController {
       this.ownRoot = true;
       h.viewContainerEl.appendChild(this.root);
     }
-    this.statusView = new PersistenceStatusView(this.root);
+    this.statusView = new PersistenceStatusView(this.root, this.t);
   }
 
   render(cb: ToolbarCallbacks): void {
@@ -63,6 +63,7 @@ export class ToolbarController {
   // Update button titles/aria after a language change without rebuilding icons.
   updateT(t: Translate): void {
     this.t = t;
+    this.statusView.updateT(t);
     if (this.underlineBtn) {
       this.underlineBtn.title = t("toolbar.underline");
       this.underlineBtn.setAttribute("aria-label", t("toolbar.underline"));
@@ -84,9 +85,12 @@ export class ToolbarController {
     for (const c of this.colors) {
       const sw = doc.createElement("button");
       sw.className = "rm-color-swatch";
-      sw.style.background = c.value;
       sw.title = this.t("toolbar.highlight", { label: c.label });
       sw.setAttribute("aria-label", this.t("toolbar.highlight.aria", { label: c.label }));
+      const dot = doc.createElement("span");
+      dot.className = "rm-color-swatch-dot";
+      dot.style.background = c.value;
+      sw.appendChild(dot);
       if (c.id === this.defaultColorId) sw.classList.add("rm-color-swatch-default");
       sw.addEventListener("click", () => cb.onColor(c.id));
       group.appendChild(sw);
@@ -115,6 +119,14 @@ export class ToolbarController {
   }
 
   setStatus(s: PersistenceStatus): void { this.statusView.update(s); }
+
+  // One-shot success pulse on the export button (delight pass): primary-color
+  // flash for 700ms, then back to normal.
+  pulseExport(): void {
+    if (!this.exportBtn) return;
+    this.exportBtn.classList.add("rm-toolbar-export-success");
+    this.root.ownerDocument.defaultView?.setTimeout(() => this.exportBtn?.classList.remove("rm-toolbar-export-success"), 750);
+  }
 
   private clearSwatches(): void { this.root.querySelector(".rm-toolbar-colors")?.remove(); }
 
