@@ -3,55 +3,6 @@ import { createIcon } from "src/render/icons";
 import type { Translate } from "src/i18n";
 import { annotationElements } from "src/render/annotation-dom";
 
-export interface EphemeralCardInput {
-  side: "left" | "right";
-  text: string;
-  color: string;
-  anchorY: number;
-  id?: string;
-}
-
-export function drawEphemeralCard(
-  containerEl: HTMLElement,
-  pageEl: HTMLElement,
-  input: EphemeralCardInput
-): HTMLElement {
-  const railClass = input.side === "left" ? "rm-card-rail-left" : "rm-card-rail-right";
-  const pageNumber = pageEl.dataset.pageNumber ?? "unknown";
-  let rail = containerEl.querySelector<HTMLElement>(`.rm-page-card-rail.${railClass}[data-page-number="${pageNumber}"]`);
-  if (!rail) {
-    rail = containerEl.ownerDocument.createElement("div");
-    rail.className = `rm-card-rail rm-page-card-rail ${railClass}`;
-    rail.dataset.pageNumber = pageNumber;
-    rail.dataset.side = input.side;
-    const containerRect = containerEl.getBoundingClientRect();
-    const pageRect = pageEl.getBoundingClientRect();
-    rail.style.top = `${pageRect.top - containerRect.top + containerEl.scrollTop}px`;
-    rail.style.height = `${pageEl.offsetHeight || pageRect.height}px`;
-    containerEl.appendChild(rail);
-  }
-  // Remove any existing card for this annotation (prevents duplicates on re-render).
-  if (input.id) annotationElements(rail, ".rm-card", input.id).forEach((node) => node.remove());
-  const card = containerEl.ownerDocument.createElement("div");
-  card.className = "rm-card";
-  if (input.id) card.dataset.annotationId = input.id;
-  card.style.position = "absolute";
-  card.style.top = `${input.anchorY}px`;
-
-  const strip = containerEl.ownerDocument.createElement("div");
-  strip.className = "rm-card-strip";
-  strip.style.background = input.color;
-  card.appendChild(strip);
-
-  const body = containerEl.ownerDocument.createElement("div");
-  body.className = "rm-card-body";
-  body.textContent = input.text; // textContent only - spec §14.1
-  card.appendChild(body);
-
-  rail.appendChild(card);
-  return card;
-}
-
 export interface CardCallbacks {
   onHover: (id: string, on: boolean) => void;
   onDragStart: (id: string, e: PointerEvent, card: HTMLElement) => void;
@@ -148,10 +99,15 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     card.appendChild(textArea);
     const actions = doc.createElement("div");
     actions.className = "rm-card-ops rm-card-ops-edit";
-    // done flag + mousedown(preventDefault) so save/cancel don't also trigger blur->commit.
+    // done flag + mousedown(preventDefault) so save/cancel don't also trigger an
+    // away-click commit. The away-click listener is removed once the edit closes.
     let done = false;
-    const commitOnce = () => { if (done) return; done = true; cb.onCommitComment(input.id, ta.value); };
-    const cancelOnce = () => { if (done) return; done = true; cb.onCancelEdit(input.id); };
+    let awayListener: ((e: PointerEvent) => void) | null = null;
+    const detachAway = () => {
+      if (awayListener) { doc.removeEventListener("pointerdown", awayListener, true); awayListener = null; }
+    };
+    const commitOnce = () => { if (done) return; done = true; detachAway(); cb.onCommitComment(input.id, ta.value); };
+    const cancelOnce = () => { if (done) return; done = true; detachAway(); cb.onCancelEdit(input.id); };
     const save = doc.createElement("button");
     save.className = "rm-card-save"; save.title = t("card.save"); save.appendChild(createIcon(doc, "check", 14));
     save.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); commitOnce(); });
@@ -162,10 +118,27 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     card.appendChild(actions);
     queueMicrotask(() => ta.focus());
     ta.addEventListener("keydown", (ev) => {
-      if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") { ev.preventDefault(); commitOnce(); }
-      else if (ev.key === "Escape") { ev.preventDefault(); cancelOnce(); }
+      // stopPropagation keeps Obsidian's app-level keymap (and PDF.js) from also
+      // acting on Ctrl/Cmd+Enter and Esc while the textarea is focused, so the
+      // save/cancel actually reaches the card (issue: Ctrl+Enter did not save).
+      if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") { ev.preventDefault(); ev.stopPropagation(); commitOnce(); }
+      else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); cancelOnce(); }
     });
-    ta.addEventListener("blur", () => commitOnce());
+    // Click-away to save: commit when the user presses the pointer outside this
+    // card. We deliberately do NOT commit on textarea blur - in the real host
+    // the PDF viewer / Obsidian command system can reclaim focus right after the
+    // card is built, and a blur handler would save an empty comment and close
+    // the edit box before the user types (issue: edit box did not stay open).
+    awayListener = (e: PointerEvent) => {
+      if (done) return;
+      // If this card was rebuilt/removed (zoom, textlayer re-render), detach the
+      // stale listener without committing - the rebuilt card owns the edit now.
+      if (!card.isConnected) { detachAway(); return; }
+      const target = e.target as Node | null;
+      if (target && card.contains(target)) return;
+      commitOnce();
+    };
+    doc.addEventListener("pointerdown", awayListener, true);
   } else {
     // 用户批注内容: shown when present (no left line).
     if (input.comment) {

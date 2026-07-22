@@ -308,21 +308,21 @@
 .rm-toolbar-separator { width: 1px; height: 18px; background: var(--rm-outline-variant); margin: 0 4px; flex: 0 0 auto; }
 /* Icon buttons: transparent toolbar affordance; hover takes a primary tint so
    the bar feels alive, not just "one tonal step up". */
-.rm-toolbar-underline, .rm-toolbar-export {
+.rm-toolbar-highlight, .rm-toolbar-underline, .rm-toolbar-export {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; background: transparent; border: 1px solid transparent;
   border-radius: 6px; cursor: pointer; padding: 0; color: var(--rm-on-surface);
   transition: background-color 120ms var(--rm-ease-out-quart), border-color 120ms var(--rm-ease-out-quart), color 120ms var(--rm-ease-out-quart);
 }
-.rm-toolbar-underline:hover, .rm-toolbar-export:hover {
+.rm-toolbar-highlight:hover, .rm-toolbar-underline:hover, .rm-toolbar-export:hover {
   background-color: color-mix(in srgb, var(--rm-primary) 16%, var(--rm-surface-2));
   border-color: color-mix(in srgb, var(--rm-primary) 45%, var(--rm-outline-variant));
   color: var(--rm-primary);
 }
-.rm-toolbar-underline:focus-visible, .rm-toolbar-export:focus-visible {
+.rm-toolbar-highlight:focus-visible, .rm-toolbar-underline:focus-visible, .rm-toolbar-export:focus-visible {
   outline: 2px solid var(--rm-primary); outline-offset: 1px;
 }
-.rm-toolbar-underline svg, .rm-toolbar-export svg { display: block; }
+.rm-toolbar-highlight svg, .rm-toolbar-underline svg, .rm-toolbar-export svg { display: block; }
 /* Export success: the button flashes primary once (delight pass). */
 @keyframes rm-export-success {
   0% { color: var(--rm-primary); border-color: var(--rm-primary); background-color: color-mix(in srgb, var(--rm-primary) 16%, transparent); }
@@ -358,7 +358,7 @@
 @media (prefers-reduced-motion: reduce) {
   .rm-card, .rm-color-swatch, .rm-color-swatch-dot, .rm-connector path, .rm-connector circle,
   .rm-card-delete, .rm-card-save, .rm-card-cancel, .rm-card-toggle, .rm-card-grip,
-  .rm-toolbar-underline, .rm-toolbar-export, .rm-card-ops, .rm-card-edit {
+  .rm-toolbar-highlight, .rm-toolbar-underline, .rm-toolbar-export, .rm-card-ops, .rm-card-edit {
     transition: none !important; animation: none !important;
   }
   /* Lifecycle motion off: enter/settle/exit become instant (session also skips

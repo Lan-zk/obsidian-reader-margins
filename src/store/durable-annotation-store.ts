@@ -241,6 +241,7 @@ export class DurableAnnotationStore {
       colors: DEFAULT_COLORS.map((c) => ({ ...c })),
       defaultColorId: DEFAULT_COLOR_ID,
       language: DEFAULT_LANGUAGE,
+      autoOpenEdit: true,
     };
     this.commitSettings();
   }
@@ -285,6 +286,10 @@ export class DurableAnnotationStore {
   private commit(path: string, changes: ChangeEntry[], payload?: StoreChangePayload) {
     this.indexes.rebuild(this.data);
     for (const cb of this.changeListeners) cb(path, changes, payload);
+    // Pass the live store object; PersistenceCoordinator.enqueue snapshots it
+    // (structuredClone) synchronously before any async save, so no live mutable
+    // object crosses an async boundary (spec §5.1). The snapshot invariant is
+    // intentionally enforced at the coordinator boundary.
     this.coord.enqueue(this.data, this.data.stateRevision);
   }
 }

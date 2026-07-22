@@ -20,6 +20,30 @@ export class Modal {
   open() {}
   close() {}
 }
+export class Menu {
+  private _items: { title: string; onClick: () => void }[] = [];
+  addItem(cb: (item: MockMenuItem) => any): this {
+    const item = new MockMenuItem();
+    cb(item);
+    this._items.push({ title: item.title, onClick: item.clickHandler });
+    return this;
+  }
+  addSeparator(): this { return this; }
+  showAtMouseEvent(_e: MouseEvent): this { return this; }
+  showAtPosition(_p: any): this { return this; }
+  // Test helpers
+  static titles(menu: Menu): string[] { return (menu as any)._items.map((i: any) => i.title); }
+  static invoke(menu: Menu, index: number): void { (menu as any)._items[index]?.onClick(); }
+  static count(menu: Menu): number { return (menu as any)._items.length; }
+}
+
+class MockMenuItem {
+  title = "";
+  clickHandler: () => void = () => {};
+  setTitle(t: string): this { this.title = t; return this; }
+  setIcon(_i: any): this { return this; }
+  onClick(fn: () => void): this { this.clickHandler = fn; return this; }
+}
 export class Setting {
   constructor(_c: any) {}
   setName(_n: string) { return this; }
@@ -28,9 +52,12 @@ export class Setting {
   addDropdown(_cb: any) { return this; }
   addColorPicker(_cb: any) { return this; }
   addButton(_cb: any) { return this; }
+  addToggle(_cb: any) { return this; }
+  setWarning() { return this; }
 }
 export class PluginSettingTab extends Setting {}
 export class TFile {}
+export class TFolder {}
 export function normalizePath(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/|\/$/g, "");
 }

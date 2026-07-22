@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { TFile, type App, type PluginManifest } from "obsidian";
+import { TFile, TFolder, type App, type PluginManifest } from "obsidian";
 import ReaderMarginsPlugin, { collectStoredPathMoves } from "src/main";
 
 const TEST_MANIFEST = {
@@ -93,7 +93,7 @@ describe("vault rename host contract", () => {
     const firstId = createStoredPdf(plugin, "old/a.pdf", "a");
     const nestedId = createStoredPdf(plugin, "old/nested/b.pdf", "b");
     createStoredPdf(plugin, "outside.pdf", "outside");
-    const folder = { path: "renamed", children: [] };
+    const folder = Object.assign(new TFolder(), { path: "renamed" });
 
     host.triggerRename(folder, "old");
 

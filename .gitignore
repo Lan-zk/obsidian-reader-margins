@@ -9,6 +9,9 @@ node_modules/
 main.js
 *.js.map
 
+# Plugin runtime data (user annotations; never committed)
+data.json
+
 # OS
 .DS_Store
 

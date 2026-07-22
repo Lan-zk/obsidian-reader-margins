@@ -7,7 +7,7 @@ import { SelectionSnapshotController } from "src/session/selection-snapshot-cont
 import { DraftController } from "src/session/draft-controller";
 import { showUndoNotice } from "src/session/undo-notice";
 import { ToolbarController } from "src/toolbar/toolbar-controller";
-import { Notice } from "obsidian";
+import { Notice, Menu } from "obsidian";
 import { drawEphemeralMark, clearMarks, setMarkHover } from "src/render/mark-renderer";
 import { buildCard, type CardCallbacks } from "src/render/annotation-card-rail";
 import { clearPageConnectors, drawEphemeralConnector } from "src/render/connector-renderer";
@@ -97,6 +97,11 @@ export class ViewerSession {
   private dragGeometryStale = false;
   private draft = new DraftController();
   private toolbar: ToolbarController | null = null;
+  // The color used by highlight/underline actions (toolbar buttons, shortcuts,
+  // context menu). Session-local; falls back to settings.defaultColorId until
+  // the user picks a swatch. Not persisted - changing the persistent default is
+  // a settings action.
+  private activeColorId: string | null = null;
   private hintShown = false; // onboarding empty-state hint, once per session
   private pendingEnterPages = new Map<string, number>();
   private pendingStitchPages = new Map<string, number>();
@@ -243,15 +248,44 @@ export class ViewerSession {
     h.viewerEl.addEventListener("click", onClick);
     this.scope.addDispose(() => h.viewerEl.removeEventListener("click", onClick));
 
+    // Right-click menu: highlight / highlight&annotate / underline / underline&annotate.
+    // Only shown when there is an active selection; otherwise the host context
+    // menu is left intact. PDF views do not fire Obsidian's editor-menu event,
+    // so the DOM contextmenu event is the contract here.
+    const onContextMenu = (e: MouseEvent) => {
+      if (!this.hasSelection()) return;
+      const app = (this.view as any)?.app;
+      if (!app) return;
+      e.preventDefault();
+      const t = this.t ?? makeT("auto", "en");
+      const menu = new Menu();
+      menu.addItem((item) => item.setTitle(t("menu.highlight")).setIcon("highlighter")
+        .onClick(() => this.createAnnotation("highlight", { annotate: false })));
+      menu.addItem((item) => item.setTitle(t("menu.highlightAnnotate")).setIcon("highlighter")
+        .onClick(() => this.createAnnotation("highlight", { annotate: true })));
+      menu.addSeparator();
+      menu.addItem((item) => item.setTitle(t("menu.underline")).setIcon("underline")
+        .onClick(() => this.createAnnotation("underline", { annotate: false })));
+      menu.addItem((item) => item.setTitle(t("menu.underlineAnnotate")).setIcon("underline")
+        .onClick(() => this.createAnnotation("underline", { annotate: true })));
+      menu.showAtMouseEvent(e);
+    };
+    h.viewerEl.addEventListener("contextmenu", onContextMenu);
+    this.scope.addDispose(() => h.viewerEl.removeEventListener("contextmenu", onContextMenu));
+
     // Subscribe to store changes: re-reconcile affected pages (spec §6.2).
     const unsub = this.store.onChange((path, changes) => {
       if (path === "settings") {
         // Language or colors may have changed: refresh the translator, toolbar,
         // and all visible cards.
         this.t = this.makeT();
+        // If the active color was deleted/reset, fall back to the default.
+        if (this.activeColorId && !this.store.data.settings.colors.some((c) => c.id === this.activeColorId)) {
+          this.activeColorId = null;
+        }
         const colors = this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name }));
         this.toolbar?.updateT(this.t);
-        this.toolbar?.updateColors(colors, this.store.data.settings.defaultColorId);
+        this.toolbar?.updateColors(colors, this.getActiveColorId());
         this.reconcileAllMountedPages();
         return;
       }
@@ -279,11 +313,12 @@ export class ViewerSession {
     const pages = h.viewerEl.querySelectorAll<HTMLElement>(".page[data-page-number]");
     pages.forEach((p) => this.reconcilePage(parseInt(p.dataset.pageNumber ?? "", 10)));
 
-    // Toolbar (color swatches / underline / export / persistence status)
+    // Toolbar (color swatches / highlight / underline / export / persistence status)
     const colors = this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name }));
-    this.toolbar = new ToolbarController(h, colors, this.store.data.settings.defaultColorId, this.t);
+    this.toolbar = new ToolbarController(h, colors, this.getActiveColorId(), this.t);
     this.toolbar.render({
-      onColor: (colorId) => { const r = this.createAnnotation("highlight", colorId); if (!r.ok) new Notice(r.reason); },
+      onSelectColor: (colorId) => this.setActiveColor(colorId),
+      onHighlight: () => { const r = this.createAnnotation("highlight"); if (!r.ok) new Notice(r.reason); },
       onUnderline: () => { const r = this.createAnnotation("underline"); if (!r.ok) new Notice(r.reason); },
       onExport: () => this.openExport(),
     });
@@ -563,16 +598,41 @@ export class ViewerSession {
       const win = n.ownerDocument.defaultView;
       if (win?.matchMedia?.("(prefers-reduced-motion: reduce)").matches) { n.remove(); return; }
       n.classList.add("rm-card-exit");
-      n.addEventListener("animationend", () => n.remove(), { once: true });
+      // Remember the rail so the cleanup can reclaim it once empty. clearPageCards,
+      // removePage, and prunePage all spare rails that still host an exit card;
+      // this callback removes the card and prunes the rail when nothing remains.
+      const rail = n.closest<HTMLElement>(".rm-page-card-rail");
+      const pageNumber = rail ? Number.parseInt(rail.dataset.pageNumber ?? "", 10) : NaN;
+      const side = rail ? (rail.dataset.side as PageCardRailSide | undefined) : undefined;
+      const cleanup = () => {
+        n.remove();
+        if (Number.isFinite(pageNumber) && side) this.cardRails?.pruneRailIfEmpty(pageNumber, side);
+      };
+      n.addEventListener("animationend", cleanup, { once: true });
       // Backstop in case animationend is swallowed (element detached mid-animation).
-      win?.setTimeout(() => n.remove(), 400);
+      win?.setTimeout(cleanup, 400);
     });
     annotationElements(container, "g.rm-connector", id).forEach((n) => n.remove());
   }
 
   hasSelection(): boolean { return this.sel.current() !== null; }
 
-  createAnnotation(markStyle: "highlight" | "underline", colorId?: string): MutationResult {
+  // The color the next highlight/underline uses. Falls back to the persisted
+  // default until the user picks a swatch in the toolbar.
+  getActiveColorId(): string {
+    return this.activeColorId ?? this.store.data.settings.defaultColorId;
+  }
+
+  // Select the active color (toolbar swatch click). No-op for an unknown id;
+  // never persists - the persistent default is changed in settings.
+  setActiveColor(colorId: string): void {
+    if (!this.store.data.settings.colors.some((c) => c.id === colorId)) return;
+    if (this.activeColorId === colorId) return;
+    this.activeColorId = colorId;
+    this.toolbar?.setActiveColor(colorId);
+  }
+
+  createAnnotation(markStyle: "highlight" | "underline", opts?: { colorId?: string; annotate?: boolean }): MutationResult {
     if (!this.handles || this.state !== "attached") return { ok: false, reason: "session not attached" };
     const snap = this.sel.current();
     if (!snap) return { ok: false, reason: "no valid selection" };
@@ -598,7 +658,7 @@ export class ViewerSession {
     const anchor = captureAnchor(snap, pageEl, scale, dims, ctx);
     if (!anchor) return { ok: false, reason: "anchor capture failed" };
     const colors = this.store.data.settings.colors;
-    const id = colorId ?? this.store.data.settings.defaultColorId;
+    const id = opts?.colorId ?? this.getActiveColorId();
     const color = colors.find((c) => c.id === id) ?? colors[0];
     const result = this.store.create(this.pdfPath, {
       markStyle, colorId: color.id, colorLabel: color.name, colorValue: color.value, anchor,
@@ -608,14 +668,60 @@ export class ViewerSession {
       // Clear the cached snapshot so a repeat trigger (double-click, double hotkey)
       // cannot create a duplicate annotation from the same selection.
       this.sel.clear();
-      // Underline is a "mark + immediately comment" action (spec §4.3): enter
-      // edit mode so the user can type without a second click (H-09).
-      if (markStyle === "underline") {
+      // "Mark + annotate" actions (highlight&annotate, underline&annotate) enter
+      // edit mode immediately so the user can type without a second click (H-09),
+      // unless the user disabled auto-open in settings. Plain highlight/underline
+      // just leave the mark.
+      if (opts?.annotate && this.store.data.settings.autoOpenEdit) {
         const created = result.annotation;
         this.editingId = created.id;
         this.draft.begin(created.id, created.revision, "");
       }
       this.reconcilePage(snap.pageNumber);
+    }
+    return result;
+  }
+
+  // True when a card's edit box is open. Used by the "Save annotation" command's
+  // checkCallback so Obsidian only routes the hotkey when there is something to save.
+  hasActiveEdit(): boolean { return this.editingId !== null; }
+
+  // Commit the currently-open edit box. Bound to the "Save annotation" command
+  // (default Mod+Enter = Ctrl+Enter on Windows, Cmd+Enter on macOS) so the save
+  // works through Obsidian's hotkey system instead of relying on the textarea's
+  // keydown listener (which the host keymap can intercept).
+  commitActiveEdit(): MutationResult {
+    if (!this.editingId) return { ok: false, reason: "no active edit" };
+    const id = this.editingId;
+    const value = this.draft.peek(id)?.value ?? "";
+    return this.commitComment(id, value);
+  }
+
+  // Shared commit path for the textarea save button, Ctrl+Enter, and the
+  // "Save annotation" command. Returns the store result so callers can react.
+  private commitComment(id: string, value: string): MutationResult {
+    const ann = this.store.byId(this.pdfPath, id);
+    if (!ann) { this.editingId = null; this.draft.cancel(id); return { ok: false, reason: "annotation not found" }; }
+    // Idempotent guard: if the edit box is already closed for this id (another
+    // path committed first - e.g. the save command, then the textarea's
+    // Ctrl+Enter also reaches here) and the stored comment already matches, do
+    // not re-save. Avoids a redundant revision bump + double save pulse when
+    // both the command and the textarea keydown fire for the same gesture.
+    if (this.editingId !== id && ann.comment === value) {
+      return { ok: true, annotation: structuredClone(ann), revision: this.store.data.stateRevision };
+    }
+    const draft = this.draft.peek(id);
+    const baseRev = draft?.baseRevision ?? ann.revision;
+    const result = this.store.update(this.pdfPath, id, { comment: value }, baseRev);
+    if (result.ok) {
+      this.editingId = null;
+      this.draft.cancel(id);
+      // Quiet "saved" acknowledgment: a 600ms outline pulse on the rebuilt card.
+      this.pulseCard(id, "rm-card-saved");
+    } else {
+      // Conflict: keep the draft (and edit mode) so the user can retry.
+      this.draft.update(id, value);
+      new Notice(this.t!("notice.conflict"));
     }
     return result;
   }
@@ -975,23 +1081,7 @@ export class ViewerSession {
         // the user's current input (H-04).
         this.draft.update(id, value);
       },
-      onCommitComment: (id, value) => {
-        const ann = this.store.byId(this.pdfPath, id);
-        const draft = this.draft.peek(id);
-        const baseRev = draft?.baseRevision ?? ann?.revision ?? 0;
-        if (!ann) { this.editingId = null; this.draft.cancel(id); return; }
-        const result = this.store.update(this.pdfPath, id, { comment: value }, baseRev);
-        if (result.ok) {
-          this.editingId = null;
-          this.draft.cancel(id);
-          // Quiet "saved" acknowledgment: a 600ms outline pulse on the rebuilt card.
-          this.pulseCard(id, "rm-card-saved");
-        } else {
-          // Conflict: keep the draft (and edit mode) so the user can retry.
-          this.draft.update(id, value);
-          new Notice(this.t!("notice.conflict"));
-        }
-      },
+      onCommitComment: (id, value) => { this.commitComment(id, value); },
       onCancelEdit: (id) => {
         this.editingId = null;
         this.draft.cancel(id);
@@ -1054,10 +1144,17 @@ export class ViewerSession {
       this.handles.viewerEl.querySelectorAll(".rm-mark-layer").forEach((n) => n.remove());
     }
     // Best-effort commit pending drafts before tearing down so unsaved input is
-    // not silently lost on view close / plugin unload (H-04).
+    // not silently lost on view close / plugin unload (H-04). A revision conflict
+    // (annotation edited in another view) cannot be merged at dispose time; the
+    // attempt is still made, and the failure is surfaced rather than swallowed
+    // (LOW-5: silent draft loss is forbidden by spec §5.8).
     for (const d of this.draft.all()) {
       const ann = this.store.byId(this.pdfPath, d.annotationId);
-      if (ann) this.store.update(this.pdfPath, d.annotationId, { comment: d.value }, d.baseRevision);
+      if (!ann) continue;
+      const result = this.store.update(this.pdfPath, d.annotationId, { comment: d.value }, d.baseRevision);
+      if (!result.ok && /revision conflict/i.test(result.reason)) {
+        new Notice(this.tNotice("notice.draftLostConflict"), 8000);
+      }
     }
     this.sel.dispose();
     this.draft.dispose();

@@ -1,8 +1,9 @@
-import { Plugin, Notice, TFile, type TAbstractFile } from "obsidian";
+import { Plugin, Notice, TFile, TFolder, type TAbstractFile } from "obsidian";
 import { DurableAnnotationStore, type DocumentPathMove, type RekeyDocumentPathsResult } from "src/store/durable-annotation-store";
 import { PdfViewManager } from "src/session/pdf-view-manager";
 import { ReaderMarginsSettingsTab } from "src/settings/settings-tab";
 import { aggregateSessionDiagnostics, DiagnosticsReporter } from "src/diagnostics/diagnostics-reporter";
+import { makeDefaultHotkeyHost } from "src/host/default-hotkey";
 import { makeT } from "src/i18n";
 
 export function collectStoredPathMoves(
@@ -56,16 +57,15 @@ export default class ReaderMarginsPlugin extends Plugin {
     let moves: DocumentPathMove[];
     if (file instanceof TFile) {
       moves = [{ oldPath, newPath: file.path }];
-    } else if (Array.isArray((file as TAbstractFile & { children?: unknown }).children)) {
-      // TFolder is identified by its documented children collection. Unknown
-      // TAbstractFile shapes fail closed below instead of guessing whether a
-      // prefix rewrite is safe.
+    } else if (file instanceof TFolder) {
       moves = collectStoredPathMoves(
         [...this.store.documentPaths(), ...this.viewManager.sessionPaths()],
         oldPath,
         file.path,
       );
     } else {
+      // Unknown TAbstractFile shape: fail closed rather than guessing whether a
+      // prefix rewrite is safe.
       new Notice(this.renameT()("notice.rename.unsupported"), 8000);
       return;
     }
@@ -85,28 +85,56 @@ export default class ReaderMarginsPlugin extends Plugin {
   }
 
   private registerCommands() {
+    // Each command is "mark only" or "mark + annotate" (annotate opens the card
+    // edit box so the user can type immediately). All use the toolbar's active
+    // color, so a color is picked once and reused across shortcuts.
+    const run = (checking: boolean, markStyle: "highlight" | "underline", annotate: boolean): boolean | void => {
+      const session = this.viewManager.activeSession();
+      if (!session || !session.hasSelection()) return false;
+      if (checking) return true;
+      const result = session.createAnnotation(markStyle, { annotate });
+      if (!result.ok) {
+        const key = markStyle === "highlight" ? "notice.cannotHighlight" : "notice.cannotUnderline";
+        new Notice(session.tNotice(key, { reason: result.reason }));
+      }
+    };
     this.addCommand({
       id: "highlight-selection",
-      name: "Highlight selected text (default color)",
-      checkCallback: (checking) => {
-        const session = this.viewManager.activeSession();
-        if (!session || !session.hasSelection()) return false;
-        if (checking) return true;
-        const result = session.createAnnotation("highlight");
-        if (!result.ok) new Notice(session.tNotice("notice.cannotHighlight", { reason: result.reason }));
-      },
+      name: "Highlight selected text (active color)",
+      checkCallback: (checking) => run(checking, "highlight", false),
     });
     this.addCommand({
-      id: "underline-and-comment",
-      name: "Underline and comment selected text",
+      id: "highlight-and-annotate",
+      name: "Highlight and annotate selected text",
+      checkCallback: (checking) => run(checking, "highlight", true),
+    });
+    this.addCommand({
+      id: "underline-selection",
+      name: "Underline selected text (active color)",
+      checkCallback: (checking) => run(checking, "underline", false),
+    });
+    this.addCommand({
+      id: "underline-and-annotate",
+      name: "Underline and annotate selected text",
+      checkCallback: (checking) => run(checking, "underline", true),
+    });
+    // "Save annotation" commits the open card edit box. Bound by default to
+    // Mod+Enter (Ctrl+Enter on Windows/Linux, Cmd+Enter on macOS) via the
+    // default-hotkey host adapter, so the save goes through Obsidian's hotkey
+    // system instead of the textarea keydown (which the host keymap can swallow).
+    this.addCommand({
+      id: "save-annotation",
+      name: "Save annotation edit box",
       checkCallback: (checking) => {
         const session = this.viewManager.activeSession();
-        if (!session || !session.hasSelection()) return false;
+        if (!session || !session.hasActiveEdit()) return false;
         if (checking) return true;
-        const result = session.createAnnotation("underline");
-        if (!result.ok) new Notice(session.tNotice("notice.cannotUnderline", { reason: result.reason }));
+        session.commitActiveEdit();
       },
     });
+    // Register the default hotkey after the command exists. The scoped id is
+    // "<pluginId>:<commandId>"; this is the key Obsidian's defaultHotkeys uses.
+    makeDefaultHotkeyHost(this.app).setDefaultHotkey(`${this.manifest.id}:save-annotation`, { modifiers: ["Mod"], key: "Enter" });
   }
 
   onunload() {

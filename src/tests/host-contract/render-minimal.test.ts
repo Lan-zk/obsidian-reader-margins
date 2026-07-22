@@ -1,12 +1,19 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
 import { buildHostFixture } from "src/tests/host-contract/host-shape-fixture";
-import { drawEphemeralMark, clearMarks } from "src/render/mark-renderer";
-import { drawEphemeralCard } from "src/render/annotation-card-rail";
-import { drawEphemeralConnector } from "src/render/connector-renderer";
+import { drawEphemeralMark, clearMarks, setMarkHover } from "src/render/mark-renderer";
+import { buildCard, type CardCallbacks } from "src/render/annotation-card-rail";
+import { drawEphemeralConnector, clearPageConnectors } from "src/render/connector-renderer";
 import { PageCardRailRegistry } from "src/render/page-card-rail";
-import { setMarkHover } from "src/render/mark-renderer";
-import { clearPageConnectors } from "src/render/connector-renderer";
+import { makeT } from "src/i18n";
+
+function callbacks(): CardCallbacks {
+  return {
+    onHover: vi.fn(), onDragStart: vi.fn(), onResetPosition: vi.fn(),
+    onEdit: vi.fn(), onDraftUpdate: vi.fn(), onCommitComment: vi.fn(),
+    onCancelEdit: vi.fn(), onChangeColor: vi.fn(), onToggleType: vi.fn(), onDelete: vi.fn(),
+  };
+}
 
 describe("ephemeral render (M-1 tracer)", () => {
   it("draws a highlight mark layer with one rect", () => {
@@ -66,14 +73,17 @@ describe("ephemeral render (M-1 tracer)", () => {
     clearMarks(pageEl);
     expect(pageEl.querySelectorAll(".rm-mark-layer")).toHaveLength(0);
   });
-  it("draws a card on the right rail with a color strip", () => {
-    const { containerEl, pages } = buildHostFixture({ marginWidthPx: 200 });
-    drawEphemeralCard(containerEl, pages[0].el, { side: "right", text: "hello", color: "#fff15c", anchorY: 20 });
-    const card = containerEl.querySelector(".rm-card") as HTMLElement;
-    expect(card).toBeTruthy();
+  it("builds a card with the quote text and annotation-color token", () => {
+    const { containerEl } = buildHostFixture({ marginWidthPx: 200 });
+    const rail = document.createElement("div");
+    containerEl.appendChild(rail);
+    const card = buildCard(rail, {
+      id: "a1", quote: "hello", color: "#fff15c",
+      colors: [{ id: "yellow", value: "#fff15c", label: "Yellow" }],
+      markStyle: "highlight", side: "right", anchorY: 20, cardLeft: 0, cardWidth: 200,
+    }, callbacks(), makeT("en", "en"));
     expect(card.textContent).toContain("hello");
-    const strip = card.querySelector(".rm-card-strip") as HTMLElement;
-    expect(strip.style.background).toMatch(/#fff15c|rgb\(255,\s*241,\s*92\)/i);
+    expect(card.style.getPropertyValue("--rm-card-color")).toMatch(/#fff15c|rgb\(255,\s*241,\s*92\)/i);
   });
   it("draws an SVG connector with one path", () => {
     const { containerEl, pages } = buildHostFixture({});
@@ -85,8 +95,15 @@ describe("ephemeral render (M-1 tracer)", () => {
   it("treats hostile annotation ids as exact dataset values without selector parsing", () => {
     const { containerEl, pages } = buildHostFixture({});
     const hostileId = `quote\"] .rm-card, [data-any="x`;
-    drawEphemeralCard(containerEl, pages[0].el, { side: "right", text: "one", color: "#fff15c", anchorY: 20, id: hostileId });
-    drawEphemeralCard(containerEl, pages[0].el, { side: "right", text: "two", color: "#fff15c", anchorY: 30, id: hostileId });
+    const rail = document.createElement("div");
+    containerEl.appendChild(rail);
+    const input = (text: string) => ({
+      id: hostileId, quote: text, color: "#fff15c",
+      colors: [{ id: "yellow", value: "#fff15c", label: "Yellow" }],
+      markStyle: "highlight" as const, side: "right" as const, anchorY: 20, cardLeft: 0, cardWidth: 200,
+    });
+    buildCard(rail, input("one"), callbacks(), makeT("en", "en"));
+    buildCard(rail, input("two"), callbacks(), makeT("en", "en"));
     drawEphemeralConnector(containerEl, { x1: 0, y1: 10, x2: 100, y2: 10, color: "#fff15c", id: hostileId });
     drawEphemeralConnector(containerEl, { x1: 0, y1: 20, x2: 100, y2: 20, color: "#fff15c", id: hostileId });
     drawEphemeralMark(pages[0].el, [{ x: 1, y: 2, width: 3, height: 4 }], "#fff15c", "highlight", 1, hostileId);

@@ -89,4 +89,71 @@ describe("annotation card accessibility", () => {
     }, callbacks(), makeT("en", "en"));
     expect(ambiguous.querySelectorAll(".rm-color-swatch-active")).toHaveLength(0);
   });
+  it("Ctrl/Cmd+Enter commits the comment and Escape cancels from the edit textarea", () => {
+    const cb = callbacks();
+    const card = buildCard(document.body, {
+      id: "a1", quote: "quote", color: "#e1c380",
+      colors: [{ id: "yellow", value: "#e1c380", label: "Yellow" }],
+      markStyle: "highlight", side: "right", anchorY: 10, cardLeft: 20, cardWidth: 200,
+      editing: true,
+    }, cb, makeT("en", "en"));
+    const ta = card.querySelector<HTMLTextAreaElement>(".rm-card-edit")!;
+    ta.focus();
+
+    ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true }));
+    expect(cb.onCommitComment).toHaveBeenCalledWith("a1", "");
+
+    // Escape cancels a fresh edit card.
+    const cb2 = callbacks();
+    const card2 = buildCard(document.body, {
+      id: "a2", quote: "quote", color: "#e1c380",
+      colors: [{ id: "yellow", value: "#e1c380", label: "Yellow" }],
+      markStyle: "highlight", side: "right", anchorY: 10, cardLeft: 20, cardWidth: 200,
+      editing: true,
+    }, cb2, makeT("en", "en"));
+    const ta2 = card2.querySelector<HTMLTextAreaElement>(".rm-card-edit")!;
+    ta2.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    expect(cb2.onCancelEdit).toHaveBeenCalledWith("a2");
+  });
+  it("clicking outside the card commits the edit (click-away), not textarea blur", () => {
+    const cb = callbacks();
+    const card = buildCard(document.body, {
+      id: "a1", quote: "quote", color: "#e1c380",
+      colors: [{ id: "yellow", value: "#e1c380", label: "Yellow" }],
+      markStyle: "highlight", side: "right", anchorY: 10, cardLeft: 20, cardWidth: 200,
+      editing: true,
+    }, cb, makeT("en", "en"));
+    const ta = card.querySelector<HTMLTextAreaElement>(".rm-card-edit")!;
+    ta.value = "click-away text";
+    // A blur alone (e.g. host stealing focus) must NOT commit - that used to
+    // close the edit box before the user typed.
+    ta.dispatchEvent(new FocusEvent("blur"));
+    expect(cb.onCommitComment).not.toHaveBeenCalled();
+    // A pointerdown outside the card is an intentional click-away -> commit.
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+    expect(cb.onCommitComment).toHaveBeenCalledWith("a1", "click-away text");
+  });
+  it("a rebuilt card's stale away-listener detaches without committing a stale value", () => {
+    const cb = callbacks();
+    buildCard(document.body, {
+      id: "a1", quote: "quote", color: "#e1c380",
+      colors: [{ id: "yellow", value: "#e1c380", label: "Yellow" }],
+      markStyle: "highlight", side: "right", anchorY: 10, cardLeft: 20, cardWidth: 200,
+      editing: true,
+    }, cb, makeT("en", "en"));
+    // Rebuild the same annotation id (zoom/textlayer re-render path): buildCard
+    // dedups the old card, but its away-listener lingers on the document.
+    const cb2 = callbacks();
+    buildCard(document.body, {
+      id: "a1", quote: "quote", color: "#e1c380",
+      colors: [{ id: "yellow", value: "#e1c380", label: "Yellow" }],
+      markStyle: "highlight", side: "right", anchorY: 10, cardLeft: 20, cardWidth: 200,
+      editing: true,
+    }, cb2, makeT("en", "en"));
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+    // The stale (disconnected) card's callback must not fire.
+    expect(cb.onCommitComment).not.toHaveBeenCalled();
+    // The current (connected) card commits.
+    expect(cb2.onCommitComment).toHaveBeenCalledWith("a1", "");
+  });
 });

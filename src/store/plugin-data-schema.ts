@@ -8,6 +8,10 @@ export interface PluginSettingsV1 {
   colors: ColorConfigV1[];
   defaultColorId: string;
   language: Language;
+  // When true (default), the "mark + annotate" actions open the card's edit box
+  // immediately on creation so the user can type without a second click. The
+  // plain "mark only" actions never auto-open regardless of this setting.
+  autoOpenEdit: boolean;
 }
 
 export interface PdfAnnotationDocumentV1 {
@@ -30,7 +34,7 @@ export function makeDefaultData(): PluginDataV1 {
   return {
     schemaVersion: 1,
     stateRevision: 0,
-    settings: { colors: DEFAULT_COLORS.map((c) => ({ ...c })), defaultColorId: DEFAULT_COLOR_ID, language: DEFAULT_LANGUAGE },
+    settings: { colors: DEFAULT_COLORS.map((c) => ({ ...c })), defaultColorId: DEFAULT_COLOR_ID, language: DEFAULT_LANGUAGE, autoOpenEdit: true },
     documents: {},
   };
 }
@@ -50,6 +54,7 @@ export function parsePluginData(raw: unknown): { state: DataLoadState; data: Plu
   const defaultColorId = typeof settings.defaultColorId === "string" ? settings.defaultColorId : colors[0].id;
   if (!colors.some((c) => c.id === defaultColorId)) return { state: "invalid", data: null };
   const language = isLanguage(settings.language) ? settings.language : DEFAULT_LANGUAGE;
+  const autoOpenEdit = typeof settings.autoOpenEdit === "boolean" ? settings.autoOpenEdit : true;
 
   const documents = r.documents;
   if (documents !== undefined && (typeof documents !== "object" || documents === null)) {
@@ -61,7 +66,7 @@ export function parsePluginData(raw: unknown): { state: DataLoadState; data: Plu
     data: {
       schemaVersion: 1,
       stateRevision: typeof r.stateRevision === "number" ? r.stateRevision : 0,
-      settings: { colors, defaultColorId, language },
+      settings: { colors, defaultColorId, language, autoOpenEdit },
       documents: sanitizeDocuments(documents),
     },
   };

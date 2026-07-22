@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
+import * as obsidian from "obsidian";
 import { buildHostFixture } from "src/tests/host-contract/host-shape-fixture";
 import { ViewerSession } from "src/session/viewer-session";
 import { DurableAnnotationStore } from "src/store/durable-annotation-store";
@@ -8,6 +9,39 @@ function makeStore() {
   const s = new DurableAnnotationStore(async () => {});
   s.loadAndValidate(null);
   return s;
+}
+
+// Build an attached session with a ready selection on page 1. Returns the
+// session plus the fixture pieces tests need. The selection range lands on a
+// tracked text-layer span so createAnnotation's anchor capture succeeds.
+function setupWithSelection() {
+  const { view, pages, containerEl } = buildHostFixture({ fingerprint: "fp-a", numPages: 1, marginWidthPx: 200 });
+  Object.defineProperty(containerEl, "offsetWidth", { configurable: true, value: 1000 });
+  Object.defineProperty(containerEl, "getBoundingClientRect", { configurable: true, value: () => ({ left: 0, top: 0, width: 1000, height: 800, right: 1000, bottom: 800 } as DOMRect) });
+  Object.defineProperty(pages[0].el, "getBoundingClientRect", { configurable: true, value: () => ({ left: 200, top: 0, width: 600, height: 800, right: 800, bottom: 800 } as DOMRect) });
+  const item = document.createElement("span");
+  item.className = "textLayerNode";
+  item.dataset.idx = "0";
+  item.textContent = "private selected words";
+  pages[0].textLayer.textContent = "";
+  pages[0].textLayer.appendChild(item);
+  const range = document.createRange();
+  range.setStart(item.firstChild!, 0);
+  range.setEnd(item.firstChild!, 22);
+  const store = makeStore();
+  const session = new ViewerSession(view as any, "test.pdf", store);
+  // The context-menu handler reads view.app for the Menu; provide a stub.
+  (view as any).app = { locale: "en" };
+  // Attach synchronously by resolving the probe; the fixture's host handles are
+  // available immediately so attach() resolves on the first tryProbe.
+  return { view, pages, containerEl, store, session, item, setSelection: () => {
+    (session as any).sel.snapshot = {
+      sessionId: "test", win: window, pageNumber: 1,
+      selectedText: "private selected words", range,
+      clientRects: [DOMRectReadOnly.fromRect({ x: 10, y: 10, width: 80, height: 14 })],
+      capturedAt: Date.now(),
+    };
+  } };
 }
 
 describe("ViewerSession (M-1)", () => {
@@ -729,5 +763,247 @@ describe("ViewerSession (M-1)", () => {
     await session.attach();
     expect(session.state).toBe("degraded");
     session.dispose();
+  });
+  it("lets the delete exit-fade play through the immediate reconcile and self-remove on animationend (MEDIUM-1)", async () => {
+    const { view, containerEl } = buildHostFixture({ fingerprint: "fp-a", numPages: 1, marginWidthPx: 200 });
+    const store = makeStore();
+    const anchor = {
+      kind: "pdf-text" as const, version: 1 as const, pageNumber: 1,
+      quote: { exact: "exit fade", normalization: "collapse-whitespace-v1" as const },
+      geometry: { space: "page-css-v1" as const, pageWidth: 600, pageHeight: 800, rotation: 0 as const, rects: [{ x: 10, y: 10, width: 50, height: 14 }] },
+    };
+    const created = store.create("test.pdf", { markStyle: "highlight", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c", anchor }, { pdfFingerprint: "fp-a", numPages: 1 });
+    if (!created.ok) throw new Error(created.reason);
+    const session = new ViewerSession(view as any, "test.pdf", store);
+    await session.attach();
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    const id = created.annotation.id;
+    expect(containerEl.querySelector(`.rm-card[data-annotation-id="${id}"]`)).not.toBeNull();
+
+    // store.delete fires onChange synchronously: removeAnnotationDom({animate})
+    // adds the exit class AND reconcilePage schedules a rebuild rAF. The rebuild
+    // must not tear down the exiting card (or its rail) before the fade paints.
+    store.delete("test.pdf", id);
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    const exiting = containerEl.querySelector<HTMLElement>(`.rm-card[data-annotation-id="${id}"]`);
+    expect(exiting).not.toBeNull();
+    expect(exiting!.classList.contains("rm-card-exit")).toBe(true);
+
+    // The exit card self-removes on animationend; its now-empty rail is pruned.
+    exiting!.dispatchEvent(new Event("animationend"));
+    expect(containerEl.querySelector(`.rm-card[data-annotation-id="${id}"]`)).toBeNull();
+    session.dispose();
+  });
+  it("preserves a deleting card on one side while the page rebuilds around a remaining card on the other side (MEDIUM-1)", async () => {
+    const { view, containerEl } = buildHostFixture({ fingerprint: "fp-a", numPages: 1, marginWidthPx: 200 });
+    const store = makeStore();
+    const leftAnchor = {
+      kind: "pdf-text" as const, version: 1 as const, pageNumber: 1,
+      quote: { exact: "left side", normalization: "collapse-whitespace-v1" as const },
+      geometry: { space: "page-css-v1" as const, pageWidth: 600, pageHeight: 800, rotation: 0 as const, rects: [{ x: 10, y: 10, width: 50, height: 14 }] },
+    };
+    const rightAnchor = {
+      kind: "pdf-text" as const, version: 1 as const, pageNumber: 1,
+      quote: { exact: "right side", normalization: "collapse-whitespace-v1" as const },
+      geometry: { space: "page-css-v1" as const, pageWidth: 600, pageHeight: 800, rotation: 0 as const, rects: [{ x: 400, y: 10, width: 50, height: 14 }] },
+    };
+    const left = store.create("test.pdf", { markStyle: "highlight", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c", anchor: leftAnchor }, { pdfFingerprint: "fp-a", numPages: 1 });
+    const right = store.create("test.pdf", { markStyle: "highlight", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c", anchor: rightAnchor }, { pdfFingerprint: "fp-a", numPages: 1 });
+    if (!left.ok || !right.ok) throw new Error("create failed");
+    const session = new ViewerSession(view as any, "test.pdf", store);
+    await session.attach();
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    // Deleting the left card leaves only the right card. prunePage would remove
+    // the (now childless) left rail - it must spare the exiting left card.
+    store.delete("test.pdf", left.annotation.id);
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    const exiting = containerEl.querySelector<HTMLElement>(`.rm-card[data-annotation-id="${left.annotation.id}"]`);
+    expect(exiting).not.toBeNull();
+    expect(exiting!.classList.contains("rm-card-exit")).toBe(true);
+    // The remaining right card is rebuilt normally.
+    expect(containerEl.querySelector(`.rm-card[data-annotation-id="${right.annotation.id}"]`)).not.toBeNull();
+
+    exiting!.dispatchEvent(new Event("animationend"));
+    expect(containerEl.querySelector(`.rm-card[data-annotation-id="${left.annotation.id}"]`)).toBeNull();
+    session.dispose();
+  });
+  it("surfaces a notice when a dispose-time draft commit hits a revision conflict (LOW-5)", async () => {
+    const { view } = buildHostFixture({ fingerprint: "fp-a", numPages: 1, marginWidthPx: 200 });
+    const store = makeStore();
+    const anchor = {
+      kind: "pdf-text" as const, version: 1 as const, pageNumber: 1,
+      quote: { exact: "draft conflict", normalization: "collapse-whitespace-v1" as const },
+      geometry: { space: "page-css-v1" as const, pageWidth: 600, pageHeight: 800, rotation: 0 as const, rects: [{ x: 10, y: 10, width: 50, height: 14 }] },
+    };
+    const created = store.create("test.pdf", { markStyle: "highlight", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c", anchor }, { pdfFingerprint: "fp-a", numPages: 1 });
+    if (!created.ok) throw new Error(created.reason);
+    const session = new ViewerSession(view as any, "test.pdf", store);
+    await session.attach();
+    const id = created.annotation.id;
+    const baseRevision = created.annotation.revision;
+    (session as any).draft.begin(id, baseRevision, "unsaved draft text");
+    // Another view saves the same annotation, bumping its revision past the draft base.
+    const other = store.update("test.pdf", id, { comment: "saved elsewhere" }, baseRevision);
+    expect(other.ok).toBe(true);
+
+    const noticeCalls: string[] = [];
+    const RealNotice = obsidian.Notice;
+    Object.defineProperty(obsidian, "Notice", {
+      configurable: true,
+      value: function (this: unknown, msg: string, _d?: number) { noticeCalls.push(String(msg)); },
+    });
+    try {
+      session.dispose();
+      expect(noticeCalls.some((m) => /draft could not be saved/i.test(m))).toBe(true);
+    } finally {
+      Object.defineProperty(obsidian, "Notice", { configurable: true, value: RealNotice });
+    }
+  });
+  it("enters edit mode only for the explicit 'annotate' variants (highlight and underline parity)", async () => {
+    const setup = setupWithSelection();
+    const { session, store, setSelection } = setup;
+    await session.attach();
+    try {
+      // Plain highlight: no edit mode.
+      setSelection();
+      let r = session.createAnnotation("highlight", { annotate: false });
+      expect(r.ok).toBe(true);
+      expect((session as any).editingId).toBeNull();
+
+      // Highlight & annotate: enters edit mode.
+      setSelection();
+      r = session.createAnnotation("highlight", { annotate: true });
+      expect(r.ok).toBe(true);
+      expect((session as any).editingId).toBe((r as any).annotation.id);
+      (session as any).editingId = null;
+
+      // Plain underline: no edit mode (was auto-edit before - now consistent).
+      setSelection();
+      r = session.createAnnotation("underline", { annotate: false });
+      expect(r.ok).toBe(true);
+      expect((session as any).editingId).toBeNull();
+
+      // Underline & annotate: enters edit mode.
+      setSelection();
+      r = session.createAnnotation("underline", { annotate: true });
+      expect(r.ok).toBe(true);
+      expect((session as any).editingId).toBe((r as any).annotation.id);
+
+      expect(store.byPath("test.pdf")).toHaveLength(4);
+    } finally {
+      session.dispose();
+    }
+  });
+  it("uses the toolbar-active color for highlight/underline and updates it via setActiveColor", async () => {
+    const setup = setupWithSelection();
+    const { session, store, setSelection } = setup;
+    await session.attach();
+    try {
+      // Default active color is the settings default (yellow).
+      expect(session.getActiveColorId()).toBe("yellow");
+
+      setSelection();
+      let r = session.createAnnotation("highlight");
+      expect(r.ok).toBe(true);
+      expect((r as any).annotation.colorIdSnapshot).toBe("yellow");
+
+      // Select blue via the toolbar; subsequent marks use it.
+      session.setActiveColor("blue");
+      expect(session.getActiveColorId()).toBe("blue");
+
+      setSelection();
+      r = session.createAnnotation("underline", { annotate: false });
+      expect(r.ok).toBe(true);
+      expect((r as any).annotation.colorIdSnapshot).toBe("blue");
+
+      // Unknown color id is ignored.
+      session.setActiveColor("does-not-exist");
+      expect(session.getActiveColorId()).toBe("blue");
+    } finally {
+      session.dispose();
+    }
+  });
+  it("commitActiveEdit saves the open edit box (Save annotation command path)", async () => {
+    const setup = setupWithSelection();
+    const { session, store, setSelection } = setup;
+    await session.attach();
+    try {
+      // No active edit -> command unavailable.
+      expect(session.hasActiveEdit()).toBe(false);
+      expect(session.commitActiveEdit().ok).toBe(false);
+
+      setSelection();
+      const r = session.createAnnotation("highlight", { annotate: true });
+      if (!r.ok) throw new Error(r.reason);
+      expect(session.hasActiveEdit()).toBe(true);
+      (session as any).draft.update(r.annotation.id, "typed note");
+
+      const save = session.commitActiveEdit();
+      expect(save.ok).toBe(true);
+      expect(session.hasActiveEdit()).toBe(false);
+      expect(store.byId("test.pdf", r.annotation.id)?.comment).toBe("typed note");
+
+      // Idempotent: if the textarea's Ctrl+Enter also reaches commitComment
+      // after the command already saved, it must not bump the revision again.
+      const revisionBefore = store.data.stateRevision;
+      const again = (session as any).commitComment(r.annotation.id, "typed note");
+      expect(again.ok).toBe(true);
+      expect(store.data.stateRevision).toBe(revisionBefore);
+    } finally {
+      session.dispose();
+    }
+  });
+  it("respects autoOpenEdit: annotate actions skip the edit box when the setting is off", async () => {
+    const setup = setupWithSelection();
+    const { session, store, setSelection } = setup;
+    store.data.settings.autoOpenEdit = false;
+    await session.attach();
+    try {
+      setSelection();
+      const r = session.createAnnotation("highlight", { annotate: true });
+      expect(r.ok).toBe(true);
+      // Auto-open suppressed by the setting; the mark is still created.
+      expect((session as any).editingId).toBeNull();
+      expect(store.byPath("test.pdf")).toHaveLength(1);
+    } finally {
+      session.dispose();
+    }
+  });
+  it("right-click with a selection shows highlight / highlight&annotate / underline / underline&annotate; no menu without a selection", async () => {
+    const setup = setupWithSelection();
+    const { pages, session, setSelection } = setup;
+    const viewerEl = pages[0].el.parentElement!;
+    await session.attach();
+    const shown: obsidian.Menu[] = [];
+    const spy = vi.spyOn(obsidian.Menu.prototype, "showAtMouseEvent").mockImplementation(function (this: obsidian.Menu) { shown.push(this); return this; });
+    try {
+      // No selection -> no menu (host context menu left intact).
+      viewerEl.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      expect(shown).toHaveLength(0);
+
+      // With a selection -> 4-item menu in the documented order.
+      setSelection();
+      const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      viewerEl.dispatchEvent(ev);
+      expect(shown).toHaveLength(1);
+      const MenuHelper = obsidian.Menu as any;
+      expect(MenuHelper.titles(shown[0])).toEqual([
+        "Highlight", "Highlight & annotate", "Underline", "Underline & annotate",
+      ]);
+      expect(ev.defaultPrevented).toBe(true);
+
+      // Invoking "Highlight & annotate" creates a highlight and enters edit mode.
+      MenuHelper.invoke(shown[0], 1);
+      const anns = (session as any).store.byPath("test.pdf");
+      expect(anns).toHaveLength(1);
+      expect(anns[0].markStyle).toBe("highlight");
+      expect((session as any).editingId).toBe(anns[0].id);
+    } finally {
+      spy.mockRestore();
+      session.dispose();
+    }
   });
 });

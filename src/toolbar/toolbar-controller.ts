@@ -8,7 +8,8 @@ import type { Translate } from "src/i18n";
 
 export interface ToolbarColors { id: string; value: string; label: string; }
 export interface ToolbarCallbacks {
-  onColor: (colorId: string) => void;
+  onSelectColor: (colorId: string) => void;
+  onHighlight: () => void;
   onUnderline: () => void;
   onExport: () => void;
 }
@@ -19,17 +20,18 @@ export class ToolbarController {
   private ownRoot = false; // true if we created the root (vs using host toolbar slot)
   private statusView: PersistenceStatusView;
   private colors: ToolbarColors[];
-  private defaultColorId: string;
+  private activeColorId: string;
   private group: HTMLElement | null = null;
   private callbacks: ToolbarCallbacks | null = null;
+  private highlightBtn: HTMLElement | null = null;
   private underlineBtn: HTMLElement | null = null;
   private exportBtn: HTMLElement | null = null;
   private separator: HTMLElement | null = null;
   private t: Translate;
 
-  constructor(private h: HostHandles, colors: ToolbarColors[], defaultColorId: string, t: Translate) {
+  constructor(private h: HostHandles, colors: ToolbarColors[], activeColorId: string, t: Translate) {
     this.colors = colors;
-    this.defaultColorId = defaultColorId;
+    this.activeColorId = activeColorId;
     this.t = t;
     // Prefer the host toolbar slot; fall back to a self-created bar on the view container.
     if (h.toolbarSlot) {
@@ -45,17 +47,18 @@ export class ToolbarController {
 
   render(cb: ToolbarCallbacks): void {
     this.callbacks = cb;
-    // Underline + export buttons (with a separator from the color swatches) are
-    // created once; their callbacks do not change when the color set changes, so
-    // they survive a swatch rebuild.
+    // Highlight + underline + export buttons (with a separator from the color
+    // swatches) are created once; their callbacks do not change when the color
+    // set changes, so they survive a swatch rebuild.
     if (!this.underlineBtn) {
+      this.highlightBtn = this.makeIconButton("rm-toolbar-highlight", "highlighter", this.t("toolbar.highlightBtn"), () => this.callbacks?.onHighlight());
       this.underlineBtn = this.makeIconButton("rm-toolbar-underline", "underline", this.t("toolbar.underline"), () => this.callbacks?.onUnderline());
       this.exportBtn = this.makeIconButton("rm-toolbar-export", "download", this.t("toolbar.export"), () => this.callbacks?.onExport());
       const doc = this.root.ownerDocument;
       this.separator = doc.createElement("span");
       this.separator.className = "rm-toolbar-separator";
-      this.root.append(this.separator, this.underlineBtn, this.exportBtn);
-      this.scope.addDispose(() => { this.underlineBtn?.remove(); this.exportBtn?.remove(); this.separator?.remove(); });
+      this.root.append(this.separator, this.highlightBtn!, this.underlineBtn, this.exportBtn);
+      this.scope.addDispose(() => { this.highlightBtn?.remove(); this.underlineBtn?.remove(); this.exportBtn?.remove(); this.separator?.remove(); });
     }
     this.rerenderSwatches();
   }
@@ -64,6 +67,10 @@ export class ToolbarController {
   updateT(t: Translate): void {
     this.t = t;
     this.statusView.updateT(t);
+    if (this.highlightBtn) {
+      this.highlightBtn.title = t("toolbar.highlightBtn");
+      this.highlightBtn.setAttribute("aria-label", t("toolbar.highlightBtn"));
+    }
     if (this.underlineBtn) {
       this.underlineBtn.title = t("toolbar.underline");
       this.underlineBtn.setAttribute("aria-label", t("toolbar.underline"));
@@ -87,12 +94,17 @@ export class ToolbarController {
       sw.className = "rm-color-swatch";
       sw.title = this.t("toolbar.highlight", { label: c.label });
       sw.setAttribute("aria-label", this.t("toolbar.highlight.aria", { label: c.label }));
+      // The active swatch (the color the next highlight/underline uses) gets a
+      // ring + a pressed state, so the control reads as a selector, not a palette
+      // of fire-and-forget highlight buttons.
+      const active = c.id === this.activeColorId;
+      sw.setAttribute("aria-pressed", String(active));
+      if (active) sw.classList.add("rm-color-swatch-default");
       const dot = doc.createElement("span");
       dot.className = "rm-color-swatch-dot";
       dot.style.background = c.value;
       sw.appendChild(dot);
-      if (c.id === this.defaultColorId) sw.classList.add("rm-color-swatch-default");
-      sw.addEventListener("click", () => cb.onColor(c.id));
+      sw.addEventListener("click", () => cb.onSelectColor(c.id));
       group.appendChild(sw);
     }
     const before = this.separator ?? this.underlineBtn;
@@ -112,20 +124,39 @@ export class ToolbarController {
     return btn;
   }
 
-  updateColors(colors: ToolbarColors[], defaultColorId: string): void {
+  updateColors(colors: ToolbarColors[], activeColorId: string): void {
     this.colors = colors;
-    this.defaultColorId = defaultColorId;
+    this.activeColorId = activeColorId;
+    this.rerenderSwatches();
+  }
+
+  // Select the active color (ring moves). Called when the user clicks a swatch
+  // or when the session's active color otherwise changes.
+  setActiveColor(colorId: string): void {
+    this.activeColorId = colorId;
     this.rerenderSwatches();
   }
 
   setStatus(s: PersistenceStatus): void { this.statusView.update(s); }
 
   // One-shot success pulse on the export button (delight pass): primary-color
-  // flash for 700ms, then back to normal.
+  // flash for 700ms, then back to normal. The timer is owned by this scope so
+  // dispose cancels it (it must not fire on a detached button), and reduced-
+  // motion skips the class entirely (CSS alone would disable the animation but
+  // leave an unowned timer and a no-op class behind) - MEDIUM-2.
   pulseExport(): void {
     if (!this.exportBtn) return;
+    const win = this.root.ownerDocument.defaultView;
+    if (!win) return;
+    if (win.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
     this.exportBtn.classList.add("rm-toolbar-export-success");
-    this.root.ownerDocument.defaultView?.setTimeout(() => this.exportBtn?.classList.remove("rm-toolbar-export-success"), 750);
+    const btn = this.exportBtn;
+    const timer = win.setTimeout(() => btn.classList.remove("rm-toolbar-export-success"), 750);
+    // Cancel the pending timer on dispose so it cannot fire on the (soon-to-be
+    // detached) button. We do not strip the class here: the render disposer
+    // removes exportBtn from the DOM, so the one-shot class is irrelevant once
+    // the scope tears down.
+    this.scope.addDispose(() => win.clearTimeout(timer));
   }
 
   private clearSwatches(): void { this.root.querySelector(".rm-toolbar-colors")?.remove(); }

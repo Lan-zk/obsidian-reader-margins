@@ -20,8 +20,8 @@ describe("i18n", () => {
     expect(makeT("zh", "en")("__missing__")).toBe("__missing__");
   });
   it("interpolates {vars}", () => {
-    expect(makeT("en", "en")("toolbar.highlight", { label: "Yellow" })).toBe("Highlight: Yellow");
-    expect(makeT("zh", "en")("toolbar.highlight", { label: "黄色" })).toBe("高亮：黄色");
+    expect(makeT("en", "en")("toolbar.highlight", { label: "Yellow" })).toBe("Select Yellow");
+    expect(makeT("zh", "en")("toolbar.highlight", { label: "黄色" })).toBe("选择 黄色");
   });
   it("translates persistence states", () => {
     const t = makeT("zh", "zh");

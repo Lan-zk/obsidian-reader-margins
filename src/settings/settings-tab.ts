@@ -36,6 +36,17 @@ export class ReaderMarginsSettingsTab extends PluginSettingTab {
       });
     });
 
+    containerEl.createEl("h2", { text: t("settings.section.editing") });
+    new Setting(containerEl)
+      .setName(t("settings.autoOpenEdit"))
+      .setDesc(t("settings.autoOpenEdit.desc"))
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.store.data.settings.autoOpenEdit).onChange((on) => {
+          this.plugin.store.data.settings.autoOpenEdit = on;
+          this.plugin.store.commitSettings();
+        });
+      });
+
     containerEl.createEl("h2", { text: t("settings.section.default") });
     const colors = this.plugin.store.data.settings.colors;
     const defaultId = this.plugin.store.data.settings.defaultColorId;

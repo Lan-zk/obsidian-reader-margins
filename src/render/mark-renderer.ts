@@ -1,4 +1,6 @@
 // src/render/mark-renderer.ts
+import { annotationElement } from "src/render/annotation-dom";
+
 export interface AnchorRect { x: number; y: number; width: number; height: number; }
 export type MarkStyle = "highlight" | "underline";
 
@@ -69,4 +71,3 @@ export function clearMarks(pageEl: HTMLElement): void {
   // duplicate marks behind). Normal case is exactly one.
   pageEl.querySelectorAll(".rm-mark-layer").forEach((n) => n.remove());
 }
-import { annotationElement } from "src/render/annotation-dom";
