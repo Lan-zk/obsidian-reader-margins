@@ -20,7 +20,7 @@ export interface PluginSettingsV1 {
   defaultDisplayMode: AnnotationDisplayMode;
   // Hover grace period (ms) before a popover card hides after the pointer leaves
   // the mark/card. Gives the user time to move from the mark into the card.
-  // Clamped to [100, 1000] on load; default 180.
+  // Any positive value is allowed; default 180.
   popoverGraceMs: number;
 }
 
@@ -54,7 +54,9 @@ function isDisplayMode(v: unknown): v is AnnotationDisplayMode {
 }
 
 function asGraceMs(v: unknown): number {
-  return typeof v === "number" && Number.isFinite(v) && v >= 100 && v <= 1000 ? v : 180;
+  // Any positive finite value is allowed; the user picks what feels right. Only
+  // missing/non-numeric/non-positive values fall back to the default.
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 180;
 }
 
 export function parsePluginData(raw: unknown): { state: DataLoadState; data: PluginDataV1 | null } {

@@ -63,11 +63,12 @@ export class ReaderMarginsSettingsTab extends PluginSettingTab {
       .setDesc(t("settings.popoverGrace.desc"))
       .addText((text) => {
         text.inputEl.type = "number";
-        text.inputEl.min = "100";
-        text.inputEl.max = "1000";
+        text.inputEl.min = "1";
         text.inputEl.step = "20";
         text.setValue(String(this.plugin.store.data.settings.popoverGraceMs)).onChange((v) => {
-          const ms = Math.max(100, Math.min(1000, Math.round(Number(v) || 180)));
+          // Any positive value is allowed (no upper bound). Floor at 1 ms so a
+          // stray 0/blank doesn't make the popover dismiss instantly.
+          const ms = Math.max(1, Math.round(Number(v) || 180));
           this.plugin.store.data.settings.popoverGraceMs = ms;
           text.setValue(String(ms));
           this.plugin.store.commitSettings();

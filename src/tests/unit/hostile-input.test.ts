@@ -104,10 +104,11 @@ describe("hostile-input hardening", () => {
   it.each([
     ["missing", undefined],
     ["non-number", "180"],
-    ["below range", 50],
-    ["above range", 2000],
     ["NaN", Number.NaN],
-  ])("settings.popoverGraceMs %s defaults to 180 (clamped to 100-1000)", (_label, v) => {
+    ["zero", 0],
+    ["negative", -50],
+    ["Infinity", Number.POSITIVE_INFINITY],
+  ])("settings.popoverGraceMs %s defaults to 180 (must be a positive finite number)", (_label, v) => {
     const raw = {
       schemaVersion: 1,
       settings: { colors: [{ id: "y", name: "Y", value: "#fff15c" }], defaultColorId: "y", popoverGraceMs: v },
@@ -115,8 +116,8 @@ describe("hostile-input hardening", () => {
     };
     expect(parsePluginData(raw).data!.settings.popoverGraceMs).toBe(180);
   });
-  it("settings.popoverGraceMs preserves valid in-range values (100 and 1000 boundaries)", () => {
-    for (const v of [100, 180, 500, 1000]) {
+  it("settings.popoverGraceMs preserves any positive value (no upper bound)", () => {
+    for (const v of [1, 50, 100, 180, 500, 1000, 2000, 5000]) {
       const raw = {
         schemaVersion: 1,
         settings: { colors: [{ id: "y", name: "Y", value: "#fff15c" }], defaultColorId: "y", popoverGraceMs: v },
