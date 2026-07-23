@@ -94,9 +94,18 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     ta.className = "rm-card-edit";
     ta.value = input.draftValue ?? input.comment ?? "";
     ta.placeholder = t("card.placeholder");
+    // Auto-grow: the field expands to fit what's typed (no native resize grip).
+    // Instant resize - layout is not animated (frontend-design guidance) and this
+    // keeps it identical under prefers-reduced-motion. scrollHeight is 0 without a
+    // real layout (jsdom), so the guard leaves the CSS min-height in charge there.
+    const grow = () => {
+      if (ta.scrollHeight <= 0) return;
+      ta.style.height = "auto";
+      ta.style.height = `${Math.min(ta.scrollHeight, 180)}px`;
+    };
     // Sync every input into the DraftController so a re-render (zoom/textlayer
     // rebuild) or conflict restores the current value instead of the stale one (H-04).
-    ta.addEventListener("input", () => cb.onDraftUpdate(input.id, ta.value));
+    ta.addEventListener("input", () => { cb.onDraftUpdate(input.id, ta.value); grow(); });
     textArea.appendChild(ta);
     card.appendChild(textArea);
     const actions = doc.createElement("div");
@@ -118,7 +127,7 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     cancel.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); cancelOnce(); });
     actions.append(save, cancel);
     card.appendChild(actions);
-    queueMicrotask(() => ta.focus());
+    queueMicrotask(() => { ta.focus(); grow(); });
     ta.addEventListener("keydown", (ev) => {
       // stopPropagation keeps Obsidian's app-level keymap (and PDF.js) from also
       // acting on Ctrl/Cmd+Enter and Esc while the textarea is focused, so the
