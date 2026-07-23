@@ -14,6 +14,8 @@ export interface CardCallbacks {
   onChangeColor: (id: string, colorId: string) => void;
   onToggleType: (id: string) => void;
   onDelete: (id: string) => void;
+  // Toggle displayMode card<->popover (Phase A convert action).
+  onChangeDisplayMode: (id: string) => void;
 }
 export interface BuildCardInput {
   id: string;
@@ -179,13 +181,21 @@ export function buildCard(parent: HTMLElement, input: BuildCardInput, cb: CardCa
     toggle.title = t("card.toggleType");
     toggle.setAttribute("aria-label", t("card.toggleType"));
     toggle.addEventListener("click", (e) => { e.stopPropagation(); cb.onToggleType(input.id); });
+    // Convert card<->popover display mode (Phase A). Same button styling as the
+    // type toggle / delete so no new card UI is introduced.
+    const convert = doc.createElement("button");
+    convert.className = "rm-card-convert";
+    convert.appendChild(createIcon(doc, "popover", 14));
+    convert.title = t("card.convertMode");
+    convert.setAttribute("aria-label", t("card.convertMode"));
+    convert.addEventListener("click", (e) => { e.stopPropagation(); cb.onChangeDisplayMode(input.id); });
     const del = doc.createElement("button");
     del.className = "rm-card-delete"; del.title = t("card.delete"); del.appendChild(createIcon(doc, "trash", 14));
     del.addEventListener("click", (e) => { e.stopPropagation(); cb.onDelete(input.id); });
-    // Right-side action group: type toggle + delete (keeps ops row's space-between layout: colors left, actions right).
+    // Right-side action group: convert + type toggle + delete (keeps ops row's space-between layout: colors left, actions right).
     const actionsGroup = doc.createElement("div");
     actionsGroup.className = "rm-card-ops-actions";
-    actionsGroup.append(toggle, del);
+    actionsGroup.append(convert, toggle, del);
     ops.append(colorsGroup, actionsGroup);
     card.appendChild(ops);
     // Click quote or comment to enter edit mode.

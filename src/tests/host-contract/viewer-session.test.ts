@@ -1006,4 +1006,334 @@ describe("ViewerSession (M-1)", () => {
       session.dispose();
     }
   });
+
+  // --- Popover display mode (Phase A) -------------------------------------
+  // displayMode "popover" renders the mark but no rail card / connector; the
+  // card appears as a hover popover. "card" mode in a narrow margin reactively
+  // falls back to popover so cards no longer vanish when the PDF is zoomed in.
+  function setupPopoverFixture(narrow: boolean) {
+    const setup = setupWithSelection();
+    const { containerEl, pages } = setup;
+    // container 1000, page 600 at left 200 -> margin 200 (wide). For narrow,
+    // shrink the container so margin < 136 (CARD_MIN_WIDTH_PX).
+    const containerWidth = narrow ? 700 : 1000;
+    Object.defineProperty(containerEl, "offsetWidth", { configurable: true, value: containerWidth });
+    Object.defineProperty(containerEl, "getBoundingClientRect", { configurable: true, value: () => ({ left: 0, top: 0, width: containerWidth, height: 800, right: containerWidth, bottom: 800 } as DOMRect) });
+    const pageLeft = (containerWidth - 600) / 2;
+    Object.defineProperty(pages[0].el, "offsetWidth", { configurable: true, value: 600 });
+    Object.defineProperty(pages[0].el, "getBoundingClientRect", { configurable: true, value: () => ({ left: pageLeft, top: 0, width: 600, height: 800, right: pageLeft + 600, bottom: 800 } as DOMRect) });
+    // Anchor resolution's quote search uses Range.getClientRects, which jsdom
+    // lacks. Patch it so resolveAnnotation can resolve a quote that exists in
+    // the text layer (the fixture sets "private selected words").
+    const rectDesc = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
+    Object.defineProperty(Range.prototype, "getClientRects", {
+      configurable: true,
+      value: () => [DOMRectReadOnly.fromRect({ x: 10 + pageLeft, y: 10, width: 80, height: 14 })],
+    });
+    const restore = () => {
+      if (rectDesc) Object.defineProperty(Range.prototype, "getClientRects", rectDesc);
+      else delete (Range.prototype as any).getClientRects;
+    };
+    return { ...setup, restore };
+  }
+  it("popover-mode annotation renders the mark but no rail card or connector", async () => {
+    const { session, store, pages, containerEl, restore } = setupPopoverFixture(false);
+    await session.attach();
+    try {
+      store.create("test.pdf", {
+        markStyle: "highlight", displayMode: "popover", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c",
+        anchor: { kind: "pdf-text", version: 1, pageNumber: 1, quote: { exact: "private selected words", normalization: "collapse-whitespace-v1" }, geometry: { space: "page-css-v1", pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 10, y: 10, width: 80, height: 14 }] } },
+      }, { pdfFingerprint: "fp-a", numPages: 1 });
+      session.reconcilePage(1);
+      await new Promise<void>((r) => setTimeout(r, 20));
+      // Mark is drawn.
+      expect(pages[0].el.querySelector(".rm-mark")).toBeTruthy();
+      // No rail card, no connector (the card appears on hover only).
+      expect(containerEl.querySelector(".rm-card")).toBeNull();
+      expect(containerEl.querySelector(".rm-connector")).toBeNull();
+    } finally {
+      session.dispose();
+      restore();
+    }
+  });
+  it("narrow margin no longer hides marks; card-mode reactively renders as popover (no rail card)", async () => {
+    const { session, store, pages, containerEl, restore } = setupPopoverFixture(true);
+    await session.attach();
+    try {
+      store.create("test.pdf", {
+        markStyle: "highlight", displayMode: "card", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c",
+        anchor: { kind: "pdf-text", version: 1, pageNumber: 1, quote: { exact: "private selected words", normalization: "collapse-whitespace-v1" }, geometry: { space: "page-css-v1", pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 10, y: 10, width: 80, height: 14 }] } },
+      }, { pdfFingerprint: "fp-a", numPages: 1 });
+      session.reconcilePage(1);
+      await new Promise<void>((r) => setTimeout(r, 20));
+      // Mark survives (previously the narrow branch hid cards AND kept marks; the
+      // regression is that no card is built, but the mark must still show).
+      expect(pages[0].el.querySelector(".rm-mark")).toBeTruthy();
+      expect(containerEl.querySelector(".rm-card")).toBeNull();
+    } finally {
+      session.dispose();
+      restore();
+    }
+  });
+  it("showPopover builds a floating .rm-card in the popover layer; hidePopover removes it", async () => {
+    const { session, store, containerEl, restore } = setupPopoverFixture(false);
+    await session.attach();
+    try {
+      const r = store.create("test.pdf", {
+        markStyle: "highlight", displayMode: "popover", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c",
+        anchor: { kind: "pdf-text", version: 1, pageNumber: 1, quote: { exact: "private selected words", normalization: "collapse-whitespace-v1" }, geometry: { space: "page-css-v1", pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 10, y: 10, width: 80, height: 14 }] } },
+      }, { pdfFingerprint: "fp-a", numPages: 1 });
+      if (!r.ok) throw new Error(r.reason);
+      session.reconcilePage(1);
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      expect(containerEl.querySelector(".rm-popover-layer")).toBeTruthy();
+      (session as any).showPopover(r.annotation.id);
+      expect(containerEl.querySelector(`.rm-popover-layer .rm-card[data-annotation-id="${r.annotation.id}"]`)).toBeTruthy();
+      (session as any).hidePopover();
+      expect(containerEl.querySelector(`.rm-popover-layer .rm-card[data-annotation-id="${r.annotation.id}"]`)).toBeNull();
+    } finally {
+      session.dispose();
+      restore();
+    }
+  });
+  it("createAnnotation with defaultDisplayMode 'popover' shows a pinned popover for editing (autoOpenEdit on)", async () => {
+    const { session, store, setSelection, containerEl, restore } = setupPopoverFixture(false);
+    store.data.settings.defaultDisplayMode = "popover";
+    await session.attach();
+    try {
+      setSelection();
+      const r = session.createAnnotation("highlight", { annotate: true });
+      expect(r.ok).toBe(true);
+      if (!r.ok) throw new Error(r.reason);
+      // The popover is shown and pinned for editing.
+      expect((session as any).popoverId).toBe(r.annotation.id);
+      expect((session as any).popoverPinned).toBe(true);
+      expect((session as any).editingId).toBe(r.annotation.id);
+      expect(containerEl.querySelector(`.rm-popover-layer .rm-card-edit`)).toBeTruthy();
+    } finally {
+      session.dispose();
+      restore();
+    }
+  });
+  it("per-card onChangeDisplayMode callback toggles displayMode card<->popover", async () => {
+    const { session, store, setSelection, containerEl, restore } = setupPopoverFixture(false);
+    await session.attach();
+    try {
+      setSelection();
+      const r = session.createAnnotation("highlight");
+      if (!r.ok) throw new Error(r.reason);
+      session.reconcilePage(1);
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      // The card-mode card has a convert button; clicking it switches to popover.
+      const convertBtn = containerEl.querySelector<HTMLElement>(`.rm-card[data-annotation-id="${r.annotation.id}"] .rm-card-convert`);
+      expect(convertBtn).toBeTruthy();
+      convertBtn!.click();
+      expect(store.byId("test.pdf", r.annotation.id)?.displayMode).toBe("popover");
+    } finally {
+      session.dispose();
+      restore();
+    }
+  });
+  it("convertAll toggles every annotation card<->popover (toolbar two-state action)", async () => {
+    const { session, store, restore } = setupPopoverFixture(false);
+    await session.attach();
+    try {
+      store.create("test.pdf", { markStyle: "highlight", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c", anchor: { kind: "pdf-text", version: 1, pageNumber: 1, quote: { exact: "a", normalization: "collapse-whitespace-v1" }, geometry: { space: "page-css-v1", pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 10, y: 10, width: 40, height: 14 }] } } }, { pdfFingerprint: "fp-a", numPages: 1 });
+      store.create("test.pdf", { markStyle: "underline", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c", anchor: { kind: "pdf-text", version: 1, pageNumber: 1, quote: { exact: "b", normalization: "collapse-whitespace-v1" }, geometry: { space: "page-css-v1", pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 10, y: 40, width: 40, height: 14 }] } } }, { pdfFingerprint: "fp-a", numPages: 1 });
+      // Mixed/default: not all popover -> convertAll sets all to popover.
+      (session as any).convertAll();
+      expect(store.byPath("test.pdf").every((a) => a.displayMode === "popover")).toBe(true);
+      // Now all popover -> convertAll sets all back to card.
+      (session as any).convertAll();
+      expect(store.byPath("test.pdf").every((a) => a.displayMode === "card")).toBe(true);
+    } finally {
+      session.dispose();
+      restore();
+    }
+  });
+
+  // Hover grace period: moving from the mark toward the card must not dismiss
+  // the popover mid-transit. A short hide delay gives the user time to enter the
+  // card; re-entering the mark/card cancels the pending hide.
+  it("popover hides after a grace period, not immediately, when the cursor leaves the mark", async () => {
+    vi.useFakeTimers();
+    const { session, store, pages, restore } = setupPopoverFixture(false);
+    await session.attach();
+    try {
+      const r = store.create("test.pdf", {
+        markStyle: "highlight", displayMode: "popover", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c",
+        comment: "a note",
+        anchor: { kind: "pdf-text", version: 1, pageNumber: 1, quote: { exact: "private selected words", normalization: "collapse-whitespace-v1" }, geometry: { space: "page-css-v1", pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 10, y: 10, width: 80, height: 14 }] } },
+      }, { pdfFingerprint: "fp-a", numPages: 1 });
+      if (!r.ok) throw new Error(r.reason);
+      session.reconcilePage(1);
+      await vi.advanceTimersByTimeAsync(20);
+      (session as any).showPopover(r.annotation.id);
+      expect((session as any).popoverId).toBe(r.annotation.id);
+      // Cursor moves off into empty space.
+      (session as any).lastPointerMove = { x: -100, y: -100, target: null };
+      (session as any).checkPopover();
+      // Still shown: the hide is delayed, not immediate.
+      expect((session as any).popoverId).toBe(r.annotation.id);
+      vi.advanceTimersByTime(300);
+      expect((session as any).popoverId).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      session.dispose();
+      restore();
+    }
+  });
+  it("re-entering the mark cancels the pending hide", async () => {
+    vi.useFakeTimers();
+    const { session, store, pages, restore } = setupPopoverFixture(false);
+    await session.attach();
+    try {
+      const r = store.create("test.pdf", {
+        markStyle: "highlight", displayMode: "popover", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c",
+        comment: "a note",
+        anchor: { kind: "pdf-text", version: 1, pageNumber: 1, quote: { exact: "private selected words", normalization: "collapse-whitespace-v1" }, geometry: { space: "page-css-v1", pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 10, y: 10, width: 80, height: 14 }] } },
+      }, { pdfFingerprint: "fp-a", numPages: 1 });
+      if (!r.ok) throw new Error(r.reason);
+      session.reconcilePage(1);
+      await vi.advanceTimersByTimeAsync(20);
+      (session as any).showPopover(r.annotation.id);
+      // Leave -> schedule hide.
+      (session as any).lastPointerMove = { x: -100, y: -100, target: null };
+      (session as any).checkPopover();
+      // Re-enter the mark before the grace period elapses (page at left 200,
+      // mark at x=10 -> clientX 210; y=15 is inside the 14px-tall mark).
+      (session as any).lastPointerMove = { x: 210, y: 15, target: pages[0].el };
+      (session as any).checkPopover();
+      vi.advanceTimersByTime(300);
+      expect((session as any).popoverId).toBe(r.annotation.id);
+    } finally {
+      vi.useRealTimers();
+      session.dispose();
+      restore();
+    }
+  });
+
+  // Regression: clicking inside the popover to edit must NOT destroy the popover
+  // card. renderPage's removeAnnotationDom used to nuke the popover card (it
+  // shares the .rm-card class), and onEdit didn't rebuild the popover - so the
+  // card vanished and could not be reopened (popoverId stayed set).
+  it("clicking to edit inside the popover keeps it open and shows the edit box", async () => {
+    const { session, store, containerEl, restore } = setupPopoverFixture(false);
+    await session.attach();
+    try {
+      const r = store.create("test.pdf", {
+        markStyle: "highlight", displayMode: "popover", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c",
+        comment: "a note",
+        anchor: { kind: "pdf-text", version: 1, pageNumber: 1, quote: { exact: "private selected words", normalization: "collapse-whitespace-v1" }, geometry: { space: "page-css-v1", pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 10, y: 10, width: 80, height: 14 }] } },
+      }, { pdfFingerprint: "fp-a", numPages: 1 });
+      if (!r.ok) throw new Error(r.reason);
+      session.reconcilePage(1);
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      (session as any).showPopover(r.annotation.id);
+      // Click the quote to enter edit mode (same gesture the user uses).
+      const quote = containerEl.querySelector<HTMLElement>(".rm-popover-layer .rm-card-quote")!;
+      quote.click();
+      // Popover still open, now in edit mode.
+      expect((session as any).popoverId).toBe(r.annotation.id);
+      expect((session as any).editingId).toBe(r.annotation.id);
+      expect(containerEl.querySelector(`.rm-popover-layer .rm-card[data-annotation-id="${r.annotation.id}"]`)).toBeTruthy();
+      expect(containerEl.querySelector(".rm-popover-layer .rm-card-edit")).toBeTruthy();
+    } finally {
+      session.dispose();
+      restore();
+    }
+  });
+  it("saving the popover edit box keeps the popover open and shows the saved comment (non-editing)", async () => {
+    const { session, store, containerEl, restore } = setupPopoverFixture(false);
+    await session.attach();
+    try {
+      const r = store.create("test.pdf", {
+        markStyle: "highlight", displayMode: "popover", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c",
+        comment: "old",
+        anchor: { kind: "pdf-text", version: 1, pageNumber: 1, quote: { exact: "private selected words", normalization: "collapse-whitespace-v1" }, geometry: { space: "page-css-v1", pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 10, y: 10, width: 80, height: 14 }] } },
+      }, { pdfFingerprint: "fp-a", numPages: 1 });
+      if (!r.ok) throw new Error(r.reason);
+      session.reconcilePage(1);
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      (session as any).showPopover(r.annotation.id);
+      // Enter edit mode, type, and save via the shared commit path.
+      (session as any).editingId = r.annotation.id;
+      (session as any).draft.begin(r.annotation.id, r.annotation.revision, "old");
+      (session as any).draft.update(r.annotation.id, "new note");
+      (session as any).commitActiveEdit();
+      // Popover still open, no longer in edit mode, and the saved comment shows.
+      expect((session as any).popoverId).toBe(r.annotation.id);
+      expect((session as any).editingId).toBeNull();
+      expect(containerEl.querySelector(".rm-popover-layer .rm-card-edit")).toBeNull();
+      expect(containerEl.querySelector(".rm-popover-layer .rm-card-comment")?.textContent).toContain("new note");
+      expect(store.byId("test.pdf", r.annotation.id)?.comment).toBe("new note");
+    } finally {
+      session.dispose();
+      restore();
+    }
+  });
+
+  // Regression: the popover layer is a sibling of viewerEl (both inside the
+  // scroll container). The pointermove listener MUST be on the container so it
+  // still fires when the cursor enters the popover card - otherwise the transit
+  // hide timer fires and dismisses the popover the user just entered.
+  it("moving the pointer into the popover card keeps it open (listener covers the card)", async () => {
+    vi.useFakeTimers();
+    const { session, store, containerEl, restore } = setupPopoverFixture(false);
+    await session.attach();
+    try {
+      const r = store.create("test.pdf", {
+        markStyle: "highlight", displayMode: "popover", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c",
+        comment: "a note",
+        anchor: { kind: "pdf-text", version: 1, pageNumber: 1, quote: { exact: "private selected words", normalization: "collapse-whitespace-v1" }, geometry: { space: "page-css-v1", pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 10, y: 10, width: 80, height: 14 }] } },
+      }, { pdfFingerprint: "fp-a", numPages: 1 });
+      if (!r.ok) throw new Error(r.reason);
+      session.reconcilePage(1);
+      await vi.advanceTimersByTimeAsync(20);
+      (session as any).showPopover(r.annotation.id);
+      // Leave the mark -> schedule hide.
+      (session as any).lastPointerMove = { x: -100, y: -100, target: null };
+      (session as any).checkPopover();
+      // Move into the card: dispatch a real pointermove on the card so the
+      // listener (on the container) fires and cancels the pending hide.
+      const card = containerEl.querySelector<HTMLElement>(".rm-popover-layer .rm-card")!;
+      expect(card).toBeTruthy();
+      card.dispatchEvent(new MouseEvent("pointermove", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(20); // flush the rAF coalesce
+      vi.advanceTimersByTime(300); // past the grace period
+      expect((session as any).popoverId).toBe(r.annotation.id);
+    } finally {
+      vi.useRealTimers();
+      session.dispose();
+      restore();
+    }
+  });
+
+  // Mark indicator: a popover-mode mark with a comment gets a visual cue so the
+  // user can spot commented annotations at a glance (no card is visible to hint).
+  it("popover-mode mark with a comment gets the has-note indicator; without a comment it does not", async () => {
+    const { session, store, pages, restore } = setupPopoverFixture(false);
+    await session.attach();
+    try {
+      const withNote = store.create("test.pdf", {
+        markStyle: "highlight", displayMode: "popover", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c",
+        comment: "read this",
+        anchor: { kind: "pdf-text", version: 1, pageNumber: 1, quote: { exact: "with note", normalization: "collapse-whitespace-v1" }, geometry: { space: "page-css-v1", pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 10, y: 10, width: 40, height: 14 }] } },
+      }, { pdfFingerprint: "fp-a", numPages: 1 });
+      const noNote = store.create("test.pdf", {
+        markStyle: "highlight", displayMode: "popover", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c",
+        anchor: { kind: "pdf-text", version: 1, pageNumber: 1, quote: { exact: "no note", normalization: "collapse-whitespace-v1" }, geometry: { space: "page-css-v1", pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 10, y: 40, width: 40, height: 14 }] } },
+      }, { pdfFingerprint: "fp-a", numPages: 1 });
+      if (!withNote.ok || !noNote.ok) throw new Error("create failed");
+      session.reconcilePage(1);
+      await new Promise<void>((r) => setTimeout(r, 20));
+      const noteGroup = pages[0].el.querySelector(`.rm-mark-group[data-annotation-id="${withNote.annotation.id}"]`);
+      const plainGroup = pages[0].el.querySelector(`.rm-mark-group[data-annotation-id="${noNote.annotation.id}"]`);
+      expect(noteGroup?.classList.contains("rm-mark-group-has-note")).toBe(true);
+      expect(plainGroup?.classList.contains("rm-mark-group-has-note")).toBe(false);
+    } finally {
+      session.dispose();
+      restore();
+    }
+  });
 });

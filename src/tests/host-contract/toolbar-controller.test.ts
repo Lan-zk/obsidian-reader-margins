@@ -12,7 +12,7 @@ function makeController(activeColorId = "yellow") {
     { id: "blue", value: "#abcbdf", label: "Blue" },
   ];
   const ctrl = new ToolbarController(h, colors, activeColorId, makeT("en", "en"));
-  const callbacks = { onSelectColor: vi.fn(), onHighlight: vi.fn(), onUnderline: vi.fn(), onExport: vi.fn() };
+  const callbacks = { onSelectColor: vi.fn(), onHighlight: vi.fn(), onUnderline: vi.fn(), onExport: vi.fn(), onConvertAll: vi.fn() };
   ctrl.render(callbacks);
   return { ctrl, toolbarSlot, callbacks };
 }
@@ -86,6 +86,22 @@ describe("ToolbarController color selection + actions", () => {
     toolbarSlot.querySelector<HTMLElement>(".rm-toolbar-underline")!.click();
     expect(callbacks.onHighlight).toHaveBeenCalledTimes(1);
     expect(callbacks.onUnderline).toHaveBeenCalledTimes(1);
+    ctrl.dispose();
+  });
+
+  // Convert-all (Phase C): single two-state toggle. aria-pressed reflects
+  // "all annotations are popover"; clicking fires onConvertAll.
+  it("convert-all button fires onConvertAll and reflects aria-pressed state", () => {
+    const { ctrl, toolbarSlot, callbacks } = makeController();
+    const btn = toolbarSlot.querySelector<HTMLElement>(".rm-toolbar-convert")!;
+    expect(btn).toBeTruthy();
+    expect(btn.getAttribute("aria-pressed")).toBe("false");
+
+    ctrl.setConvertAllState(true);
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+
+    btn.click();
+    expect(callbacks.onConvertAll).toHaveBeenCalledTimes(1);
     ctrl.dispose();
   });
 });

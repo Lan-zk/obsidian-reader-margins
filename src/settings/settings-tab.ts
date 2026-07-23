@@ -46,6 +46,33 @@ export class ReaderMarginsSettingsTab extends PluginSettingTab {
           this.plugin.store.commitSettings();
         });
       });
+    new Setting(containerEl)
+      .setName(t("settings.defaultDisplayMode"))
+      .setDesc(t("settings.defaultDisplayMode.desc"))
+      .addDropdown((dd) => {
+        dd.addOption("card", t("settings.displayMode.card"));
+        dd.addOption("popover", t("settings.displayMode.popover"));
+        dd.setValue(this.plugin.store.data.settings.defaultDisplayMode).onChange((mode: string) => {
+          if (mode !== "card" && mode !== "popover") return;
+          this.plugin.store.data.settings.defaultDisplayMode = mode;
+          this.plugin.store.commitSettings();
+        });
+      });
+    new Setting(containerEl)
+      .setName(t("settings.popoverGrace"))
+      .setDesc(t("settings.popoverGrace.desc"))
+      .addText((text) => {
+        text.inputEl.type = "number";
+        text.inputEl.min = "100";
+        text.inputEl.max = "1000";
+        text.inputEl.step = "20";
+        text.setValue(String(this.plugin.store.data.settings.popoverGraceMs)).onChange((v) => {
+          const ms = Math.max(100, Math.min(1000, Math.round(Number(v) || 180)));
+          this.plugin.store.data.settings.popoverGraceMs = ms;
+          text.setValue(String(ms));
+          this.plugin.store.commitSettings();
+        });
+      });
 
     containerEl.createEl("h2", { text: t("settings.section.default") });
     const colors = this.plugin.store.data.settings.colors;

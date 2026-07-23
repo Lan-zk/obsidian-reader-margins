@@ -14,6 +14,7 @@ import { clearPageConnectors, drawEphemeralConnector } from "src/render/connecto
 import { layoutCards } from "src/render/card-layout-engine";
 import { computeCardRailGeometry } from "src/render/card-drag-geometry";
 import { PageCardRailRegistry, type PageCardRailSide } from "src/render/page-card-rail";
+import { computePopoverPlacement } from "src/render/popover-placement";
 import { unionCenter, cleanGeometry, type AnchorRect } from "src/domain/pdf-text-anchor";
 import {
   captureAnchor,
@@ -33,7 +34,7 @@ import { makeT, type Translate } from "src/i18n";
 import { createIcon } from "src/render/icons";
 import type { DurableAnnotationStore } from "src/store/durable-annotation-store";
 import { signatureMismatch } from "src/host/source-signature";
-import type { AnnotationRecordV1, DocumentSignature, MutationResult } from "src/domain/annotation";
+import type { AnnotationRecordV1, DocumentSignature, MutationResult, DisplayMode } from "src/domain/annotation";
 import { annotationElement, annotationElements } from "src/render/annotation-dom";
 
 export type SessionState = "discovered" | "probing" | "attached" | "degraded" | "disposing" | "disposed";
@@ -110,6 +111,18 @@ export class ViewerSession {
   private layoutInvalidation: LayoutInvalidationController | null = null;
   private layoutObserverState: LayoutObserverState | "unknown" = "unknown";
   private cardRails: PageCardRailRegistry | null = null;
+  // Popover display mode (Phase A). A single hover-triggered .rm-card lives in
+  // .rm-popover-layer. popoverId is the shown annotation; popoverPinned keeps it
+  // open (click inside / editing) so hover-leave does not close it mid-interaction.
+  // popoverRenderIds tracks which annotations currently render as popovers (mark
+  // only) so the hover hit-test only triggers popovers for marks without a rail card.
+  private popoverId: string | null = null;
+  private popoverPinned = false;
+  private popoverLayer: HTMLElement | null = null;
+  private popoverRafId: number | null = null;
+  private popoverHideTimer: number | null = null;
+  private lastPointerMove: { x: number; y: number; target: Node | null } | null = null;
+  private popoverRenderIds = new Set<string>();
 
   constructor(private view: any, pdfPath: string, private store: DurableAnnotationStore, opts: ViewerSessionOptions = {}) {
     this.pdfPath = pdfPath;
@@ -273,6 +286,58 @@ export class ViewerSession {
     h.viewerEl.addEventListener("contextmenu", onContextMenu);
     this.scope.addDispose(() => h.viewerEl.removeEventListener("contextmenu", onContextMenu));
 
+    // Popover layer (Phase A): hosts hover-triggered cards for popover display
+    // mode and the narrow-margin reactive fallback. Created once per attach.
+    this.popoverLayer = doc.createElement("div");
+    this.popoverLayer.className = "rm-popover-layer";
+    h.viewerContainerEl.appendChild(this.popoverLayer);
+    this.scope.addDispose(() => { this.popoverLayer?.remove(); this.popoverLayer = null; });
+
+    // Hover-triggered popover: pointermove over a popover-render-mode mark shows
+    // its card; moving off (not over the mark, not over the card) hides it.
+    // Coalesced via rAF so rapid moves do not rebuild the card each frame. Skip
+    // entirely while a button is held (text selection / drag) so the popover
+    // never interferes with selection gestures.
+    // NOTE: the listener is on viewerContainerEl (the scroll container), NOT
+    // viewerEl. The popover layer is a sibling of viewerEl inside the container,
+    // so a listener on viewerEl would NOT fire for moves over the card - the
+    // transit hide timer would then fire and dismiss the popover the user just
+    // entered. The container is the common ancestor of both pages and the card.
+    const onPointerMove = (e: PointerEvent) => {
+      if (e.buttons !== 0) return;
+      if (!this.handles) return;
+      this.lastPointerMove = { x: e.clientX, y: e.clientY, target: e.target as Node | null };
+      this.schedulePopoverCheck();
+    };
+    h.viewerContainerEl.addEventListener("pointermove", onPointerMove);
+    this.scope.addDispose(() => h.viewerContainerEl.removeEventListener("pointermove", onPointerMove));
+
+    // Pin on interaction inside the popover; click outside closes (unless the
+    // edit box's own click-away is handling a commit). forceHide so a pinned
+    // popover also closes on outside click (unpin + hide). On viewerContainerEl
+    // for the same reason as pointermove: the card lives in the popover layer,
+    // a sibling of viewerEl.
+    const onPopoverPointerDown = (e: PointerEvent) => {
+      if (this.popoverId === null) return;
+      const target = e.target as Node | null;
+      if (this.popoverLayer?.contains(target)) { this.popoverPinned = true; this.cancelHidePopover(); return; }
+      if (this.editingId === this.popoverId) return; // buildCard click-away commits
+      this.forceHidePopover();
+    };
+    h.viewerContainerEl.addEventListener("pointerdown", onPopoverPointerDown);
+    this.scope.addDispose(() => h.viewerContainerEl.removeEventListener("pointerdown", onPopoverPointerDown));
+
+    // Esc closes a pinned (non-editing) popover. The textarea's own keydown
+    // handles Esc while editing (cancelEdit).
+    const onPopoverKeydown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (this.popoverId === null) return;
+      if (this.editingId === this.popoverId) return; // textarea handles it
+      this.hidePopover();
+    };
+    doc.addEventListener("keydown", onPopoverKeydown);
+    this.scope.addDispose(() => doc.removeEventListener("keydown", onPopoverKeydown));
+
     // Subscribe to store changes: re-reconcile affected pages (spec §6.2).
     const unsub = this.store.onChange((path, changes) => {
       if (path === "settings") {
@@ -292,7 +357,11 @@ export class ViewerSession {
       if (path !== this.pdfPath) return;
       const pages = new Set<number>();
       for (const ch of changes) {
-        if (ch.deleted) { this.removeAnnotationDom(ch.id, { animate: true }); if (ch.page != null) pages.add(ch.page); }
+        if (ch.deleted) {
+          this.removeAnnotationDom(ch.id, { animate: true });
+          if (this.popoverId === ch.id) this.forceHidePopover();
+          if (ch.page != null) pages.add(ch.page);
+        }
         else {
           const a = this.store.byId(path, ch.id);
           if (a) {
@@ -304,7 +373,14 @@ export class ViewerSession {
           }
         }
       }
+      // Rebuild the popover if its annotation was updated (comment/color/mode).
+      if (this.popoverId && changes.some((c) => !c.deleted && c.id === this.popoverId)) {
+        this.rebuildPopover();
+      }
       pages.forEach((p) => this.reconcilePage(p));
+      // The convert-all button state depends on annotation displayModes, which
+      // may have changed (create/delete/toggle/convert-all). Refresh it.
+      this.updateConvertAllState();
     });
     this.scope.addDispose(unsub);
 
@@ -321,7 +397,9 @@ export class ViewerSession {
       onHighlight: () => { const r = this.createAnnotation("highlight"); if (!r.ok) new Notice(r.reason); },
       onUnderline: () => { const r = this.createAnnotation("underline"); if (!r.ok) new Notice(r.reason); },
       onExport: () => this.openExport(),
+      onConvertAll: () => this.convertAll(),
     });
+    this.updateConvertAllState();
     const unsubStatus = this.store.onStatus((s) => this.toolbar?.setStatus(s));
     this.scope.addDispose(unsubStatus);
     this.scope.addDispose(() => { this.toolbar?.dispose(); this.toolbar = null; });
@@ -436,23 +514,16 @@ export class ViewerSession {
       return;
     }
 
-    // Narrow window: hide cards/rails but keep marks per spec §5.4 (H-05).
+    // Narrow margin no longer hides cards. Card-mode annotations reactively
+    // fall back to popover display (mark only; hover shows the card), and
+    // explicit popover-mode annotations always render this way. Marks are
+    // always drawn. (spec §5.4 H-05 previously hid ALL cards in narrow mode -
+    // cards "disappeared" when the PDF was zoomed in; popover fallback fixes it.)
     // Use offsetWidth directly – getBoundingClientRect is unreliable in jsdom.
     const marginPx = container.offsetWidth && pageEl.offsetWidth
       ? (container.offsetWidth - pageEl.offsetWidth) / 2 - 16
       : Infinity;
     const narrow = marginPx < 136;
-    if (narrow) {
-      this.cardRails?.removePage(pageNumber);
-      for (const ann of anns) {
-        this.removeAnnotationDom(ann.id);
-        const resolved = this.resolveAnnotation(ann, pageEl, scale);
-        if (!resolved) continue;
-        this.projectResolvedAnchor(ann, resolved);
-        drawEphemeralMark(pageEl, resolved.rects, ann.colorValueSnapshot, ann.markStyle, scale, ann.id);
-      }
-      return;
-    }
 
     const containerRect = container.getBoundingClientRect();
     const pageRect = pageEl.getBoundingClientRect();
@@ -466,7 +537,12 @@ export class ViewerSession {
     const viewportRight = viewportLeft + containerWidth;
     const pageHeight = pageEl.offsetHeight || pageRect.height;
 
-    // First pass: draw marks, create cards (unpositioned), group by side.
+    // Refresh the popover-render set for this page: clear this page's ids, then
+    // re-add the ones that render as popovers below.
+    for (const ann of anns) this.popoverRenderIds.delete(ann.id);
+
+    // First pass: draw marks for every annotation; create rail cards only for
+    // card-render-mode annotations. Popover-render annotations get mark-only.
     type Entry = { ann: AnnotationRecordV1; card: HTMLElement; anchorY: number; pinTop?: number };
     const bySide: Record<"left" | "right", Entry[]> = { left: [], right: [] };
     for (const ann of anns) {
@@ -476,13 +552,27 @@ export class ViewerSession {
       const resolved = this.resolveAnnotation(ann, pageEl, scale);
       if (!resolved) { this.removeAnnotationDom(ann.id); continue; }
       const rects = resolved.rects;
-      drawEphemeralMark(pageEl, rects, ann.colorValueSnapshot, ann.markStyle, scale, ann.id);
+      // Render-mode decision (needed before drawing the mark so a popover-mode
+      // mark with a comment gets the has-note dot indicator). Popover display, or
+      // card display with no room for a rail card (narrow), renders mark-only.
+      const renderPopover = ann.displayMode === "popover" || narrow;
+      const hasNote = renderPopover && !!(ann.comment && ann.comment.trim());
+      drawEphemeralMark(pageEl, rects, ann.colorValueSnapshot, ann.markStyle, scale, ann.id, hasNote);
       // Marks are redrawn wholesale - re-apply the hover lift, same as the
       // connector's `selected` flag below (B: taut thread survives re-render).
       if (this.hoveredId === ann.id) setMarkHover(pageEl, ann.id, true);
       const first = rects[0];
       const side: "left" | "right" = unionCenter(rects).x < pageWidth / (2 * scale) ? "left" : "right";
       this.projectResolvedAnchor(ann, resolved, side);
+
+      if (renderPopover) {
+        this.popoverRenderIds.add(ann.id);
+        this.removeAnnotationDom(ann.id);
+        this.pendingEnterPages.delete(ann.id);
+        this.pendingStitchPages.delete(ann.id);
+        continue;
+      }
+
       const anchorY = (first.y + first.height / 2) * scale;
       const railLeft = side === "left" ? viewportLeft : offsetX + pageWidth;
       const railRight = side === "left" ? offsetX : viewportRight;
@@ -593,6 +683,11 @@ export class ViewerSession {
     if (!this.handles) return;
     const container = this.handles.viewerContainerEl;
     annotationElements<HTMLElement>(container, ".rm-card", id).forEach((n) => {
+      // The popover card lives in .rm-popover-layer and is managed separately
+      // (showPopover/rebuildPopover/hidePopover). renderPage calls this for every
+      // popover-mode annotation to clear stale RAIL cards - without this guard it
+      // would also delete the popover card the user is interacting with.
+      if (n.closest(".rm-popover-layer")) return;
       if (!opts?.animate) { n.remove(); return; }
       if (n.classList.contains("rm-card-exit")) return; // already exiting (delete fires twice: change event + caller)
       const win = n.ownerDocument.defaultView;
@@ -615,6 +710,183 @@ export class ViewerSession {
     annotationElements(container, "g.rm-connector", id).forEach((n) => n.remove());
   }
 
+  // --- Popover display (Phase A) ------------------------------------------
+  // A single hover-triggered .rm-card lives in .rm-popover-layer. It reuses the
+  // exact same buildCard/styles as rail cards - no new card UI. Shown for marks
+  // in popover render mode (explicit popover displayMode, or card-mode in a
+  // narrow margin). Hover shows; click inside pins; click outside / Esc closes.
+
+  // Narrow-margin check factored out so createAnnotation can decide whether a
+  // new card-mode annotation will render as a popover (no room for a rail card).
+  private isNarrow(pageEl: HTMLElement): boolean {
+    if (!this.handles) return false;
+    const container = this.handles.viewerContainerEl;
+    const marginPx = container.offsetWidth && pageEl.offsetWidth
+      ? (container.offsetWidth - pageEl.offsetWidth) / 2 - 16
+      : Infinity;
+    return marginPx < 136;
+  }
+
+  private schedulePopoverCheck(): void {
+    if (!this.handles || this.popoverRafId !== null) return;
+    const win = this.handles.viewerEl.ownerDocument.defaultView;
+    if (!win) return;
+    const gen = this.generation;
+    this.popoverRafId = win.requestAnimationFrame(() => {
+      this.popoverRafId = null;
+      if (this.generation !== gen) return;
+      this.checkPopover();
+    });
+  }
+
+  private checkPopover(): void {
+    // Pinned or editing: do not change the popover on hover.
+    if (this.popoverPinned || (this.editingId !== null && this.editingId === this.popoverId)) return;
+    const e = this.lastPointerMove;
+    if (!e || !this.handles) return;
+    // Cursor inside the current popover card: keep it open so the user can
+    // move from the mark into the card without it dismissing.
+    if (this.popoverId !== null && this.popoverLayer?.contains(e.target)) { this.cancelHidePopover(); return; }
+    const hitId = this.hitTestPopoverMark(e.x, e.y);
+    if (hitId) {
+      this.cancelHidePopover();
+      if (hitId !== this.popoverId) this.showPopover(hitId);
+    } else {
+      // Don't hide immediately - grace period so the user can transit from the
+      // mark into the card (or back) without the popover vanishing mid-move.
+      this.scheduleHidePopover();
+    }
+  }
+
+  private cancelHidePopover(): void {
+    if (this.popoverHideTimer !== null && this.handles) {
+      this.handles.viewerEl.ownerDocument.defaultView?.clearTimeout(this.popoverHideTimer);
+      this.popoverHideTimer = null;
+    }
+  }
+
+  private scheduleHidePopover(): void {
+    this.cancelHidePopover();
+    const win = this.handles?.viewerEl.ownerDocument.defaultView;
+    if (!win) { this.hidePopover(); return; }
+    const grace = this.store.data.settings.popoverGraceMs;
+    this.popoverHideTimer = win.setTimeout(() => {
+      this.popoverHideTimer = null;
+      this.hidePopover();
+    }, grace);
+  }
+
+  private pageUnderClientPoint(clientX: number, clientY: number): HTMLElement | null {
+    if (!this.handles) return null;
+    const pages = this.handles.viewerEl.querySelectorAll<HTMLElement>(".page[data-page-number]");
+    for (const p of pages) {
+      const r = p.getBoundingClientRect();
+      if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) return p;
+    }
+    return null;
+  }
+
+  private hitTestPopoverMark(clientX: number, clientY: number): string | null {
+    if (!this.handles) return null;
+    const pageEl = this.pageUnderClientPoint(clientX, clientY);
+    if (!pageEl) return null;
+    const pageNumber = parseInt(pageEl.dataset.pageNumber ?? "", 10);
+    if (!Number.isFinite(pageNumber)) return null;
+    const entries = this.resolvedAnchors.hitEntries(this.generation, pageNumber);
+    if (entries.length === 0) return null;
+    const scale = readCurrentScale(this.handles);
+    const pageRect = pageEl.getBoundingClientRect();
+    const px = (clientX - pageRect.left) / scale;
+    const py = (clientY - pageRect.top) / scale;
+    const id = hitTestAnnotation(entries, px, py);
+    // Only marks in popover render mode (no visible rail card) trigger a popover.
+    return id && this.popoverRenderIds.has(id) ? id : null;
+  }
+
+  showPopover(id: string): void {
+    if (!this.handles || !this.popoverLayer) return;
+    this.cancelHidePopover();
+    const ann = this.store.byId(this.pdfPath, id);
+    if (!ann) { this.forceHidePopover(); return; }
+    this.popoverId = id;
+    this.buildPopoverCard(ann);
+  }
+
+  private buildPopoverCard(ann: AnnotationRecordV1): void {
+    if (!this.handles || !this.popoverLayer) return;
+    const doc = this.popoverLayer.ownerDocument;
+    // Replace any existing popover card (rebuild on update/edit).
+    this.popoverLayer.querySelectorAll(".rm-card").forEach((n) => n.remove());
+    const pageEl = findPageEl(this.handles, ann.anchor.pageNumber);
+    if (!pageEl) return;
+    const scale = readCurrentScale(this.handles);
+    const resolved = this.resolveAnnotation(ann, pageEl, scale);
+    if (!resolved) return;
+    this.projectResolvedAnchor(ann, resolved);
+    const first = resolved.rects[0];
+    // Mark rect + viewport in viewer-container CONTENT coords (the popover
+    // positions absolutely in this space, so it scrolls with the page).
+    const container = this.handles.viewerContainerEl;
+    const containerRect = container.getBoundingClientRect();
+    const pageRect = pageEl.getBoundingClientRect();
+    const offsetX = pageRect.left - containerRect.left + container.scrollLeft;
+    const offsetY = pageRect.top - containerRect.top + container.scrollTop;
+    const markRect = { x: offsetX + first.x * scale, y: offsetY + first.y * scale, width: first.width * scale, height: first.height * scale };
+    const vp = {
+      left: container.scrollLeft, top: container.scrollTop,
+      right: container.scrollLeft + (container.clientWidth || container.offsetWidth),
+      bottom: container.scrollTop + (container.clientHeight || container.offsetHeight),
+    };
+    const cardWidth = Math.min(240, Math.max(160, vp.right - vp.left - 16));
+    const isEditing = this.editingId === ann.id;
+    // Estimate height for placement; re-measure after build in a real host.
+    const estimateHeight = 140;
+    let placement = computePopoverPlacement({ markRect, cardSize: { width: cardWidth, height: estimateHeight }, viewport: vp });
+    const card = buildCard(this.popoverLayer, {
+      id: ann.id, quote: ann.anchor.quote.exact, comment: ann.comment, color: ann.colorValueSnapshot, colorId: ann.colorIdSnapshot,
+      colors: this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name })),
+      markStyle: ann.markStyle, side: "right", anchorY: placement.top, editing: isEditing,
+      draftValue: isEditing ? this.draft.peek(ann.id)?.value : undefined,
+      cardLeft: placement.left, cardWidth,
+    }, this.cardCallbacks(), this.t ?? makeT("auto", "en"));
+    // Re-place with the real height when the host can measure it (jsdom returns 0).
+    const realHeight = card.offsetHeight || 0;
+    if (realHeight > 0 && Math.abs(realHeight - estimateHeight) > 8) {
+      placement = computePopoverPlacement({ markRect, cardSize: { width: cardWidth, height: realHeight }, viewport: vp });
+      card.style.top = `${placement.top}px`;
+      card.style.left = `${placement.left}px`;
+    }
+  }
+
+  // Soft hide: used by the hover-leave grace timer. Respects pin/editing so a
+  // popover the user is actively using is not dismissed by a stale timer.
+  hidePopover(): void {
+    if (this.popoverId === null) return;
+    if (this.editingId === this.popoverId) return;
+    if (this.popoverPinned) return;
+    this.forceHidePopover();
+  }
+
+  // Unconditional clear (deletion, mode change to card, click-outside, dispose).
+  private forceHidePopover(): void {
+    this.cancelHidePopover();
+    this.popoverId = null;
+    this.popoverPinned = false;
+    this.popoverLayer?.querySelectorAll(".rm-card").forEach((n) => n.remove());
+  }
+
+  private rebuildPopover(): void {
+    if (this.popoverId === null || !this.handles) return;
+    const ann = this.store.byId(this.pdfPath, this.popoverId);
+    if (!ann) { this.forceHidePopover(); return; }
+    // If the annotation no longer renders as a popover (switched to card-mode
+    // with room for a rail card), close it - the rail card is now the view.
+    const pageEl = findPageEl(this.handles, ann.anchor.pageNumber);
+    const narrow = pageEl ? this.isNarrow(pageEl) : false;
+    if (ann.displayMode === "card" && !narrow) { this.forceHidePopover(); return; }
+    this.buildPopoverCard(ann);
+  }
+
   hasSelection(): boolean { return this.sel.current() !== null; }
 
   // The color the next highlight/underline uses. Falls back to the persisted
@@ -630,6 +902,23 @@ export class ViewerSession {
     if (this.activeColorId === colorId) return;
     this.activeColorId = colorId;
     this.toolbar?.setActiveColor(colorId);
+  }
+
+  // Toolbar "convert all" (Phase C): two-state toggle. If every annotation in
+  // this document is already popover, switch all to card; otherwise switch all
+  // to popover. The store change event then re-reconciles and updates the
+  // button state via updateConvertAllState.
+  convertAll(): void {
+    const anns = this.store.byPath(this.pdfPath);
+    if (anns.length === 0) return;
+    const allPopover = anns.every((a) => a.displayMode === "popover");
+    this.store.setDisplayModeForAll(this.pdfPath, allPopover ? "card" : "popover");
+  }
+
+  private updateConvertAllState(): void {
+    const anns = this.store.byPath(this.pdfPath);
+    const allPopover = anns.length > 0 && anns.every((a) => a.displayMode === "popover");
+    this.toolbar?.setConvertAllState(allPopover);
   }
 
   createAnnotation(markStyle: "highlight" | "underline", opts?: { colorId?: string; annotate?: boolean }): MutationResult {
@@ -676,6 +965,14 @@ export class ViewerSession {
         const created = result.annotation;
         this.editingId = created.id;
         this.draft.begin(created.id, created.revision, "");
+        // If the new annotation will render as a popover (explicit popover mode,
+        // or card-mode in a narrow margin with no room for a rail card), show +
+        // pin the popover so the user can type immediately. Otherwise the rail
+        // card's edit box opens on reconcilePage (current behavior).
+        if (created.displayMode === "popover" || this.isNarrow(pageEl)) {
+          this.showPopover(created.id);
+          this.popoverPinned = true;
+        }
       }
       this.reconcilePage(snap.pageNumber);
     }
@@ -718,6 +1015,11 @@ export class ViewerSession {
       this.draft.cancel(id);
       // Quiet "saved" acknowledgment: a 600ms outline pulse on the rebuilt card.
       this.pulseCard(id, "rm-card-saved");
+      // store.update fired the change event synchronously, which rebuilt the
+      // popover WHILE editingId was still set (stale editing=true). Rebuild
+      // again now that editingId is cleared so the popover reflects the saved
+      // state (non-editing) instead of a leftover textarea.
+      if (this.popoverId === id) this.rebuildPopover();
     } else {
       // Conflict: keep the draft (and edit mode) so the user can retry.
       this.draft.update(id, value);
@@ -1065,6 +1367,14 @@ export class ViewerSession {
       const ann = this.store.byId(this.pdfPath, id);
       if (ann) this.reconcilePage(ann.anchor.pageNumber);
     };
+    // When the affected annotation is the one shown in the popover, rebuild the
+    // popover card directly (reconcilePage only manages rail cards, and would
+    // not reflect the editing/comment change on the popover). Falls back to
+    // reRender for rail-card annotations.
+    const reRenderOrPopover = (id: string) => {
+      if (this.popoverId === id) this.rebuildPopover();
+      else reRender(id);
+    };
     return {
       onHover: (id, on) => this.hoverCard(on ? id : null),
       onDragStart: (id, e, card) => this.beginDrag(id, e, card),
@@ -1074,7 +1384,7 @@ export class ViewerSession {
         if (!ann) return;
         this.editingId = id;
         this.draft.begin(id, ann.revision, ann.comment ?? "");
-        reRender(id);
+        reRenderOrPopover(id);
       },
       onDraftUpdate: (id, value) => {
         // Keep the draft in sync with the textarea so re-render/conflict restore
@@ -1085,7 +1395,7 @@ export class ViewerSession {
       onCancelEdit: (id) => {
         this.editingId = null;
         this.draft.cancel(id);
-        reRender(id);
+        reRenderOrPopover(id);
       },
       onChangeColor: (id, colorId) => {
         const ann = this.store.byId(this.pdfPath, id);
@@ -1122,6 +1432,14 @@ export class ViewerSession {
         const next = ann.markStyle === "highlight" ? "underline" : "highlight";
         this.store.update(this.pdfPath, id, { markStyle: next }, ann.revision);
       },
+      onChangeDisplayMode: (id) => {
+        const ann = this.store.byId(this.pdfPath, id);
+        if (!ann) return;
+        const next: DisplayMode = ann.displayMode === "card" ? "popover" : "card";
+        this.store.update(this.pdfPath, id, { displayMode: next }, ann.revision);
+        // The store change event rebuilds the page (rail card appears/disappears)
+        // and rebuilds/closes the popover. No explicit handling needed here.
+      },
     };
   }
 
@@ -1138,6 +1456,13 @@ export class ViewerSession {
     }
     this.pendingReconcile.clear();
     this.pendingConnectorRedraw.clear();
+    this.forceHidePopover();
+    if (this.popoverRafId !== null && this.handles) {
+      this.handles.viewerEl.ownerDocument.defaultView?.cancelAnimationFrame(this.popoverRafId);
+      this.popoverRafId = null;
+    }
+    this.cancelHidePopover();
+    this.popoverRenderIds.clear();
     if (this.handles) {
       this.handles.viewerContainerEl.querySelectorAll(".rm-card-rail").forEach((rail) => rail.remove());
       this.handles.viewerContainerEl.querySelector(".rm-connector-layer")?.remove();

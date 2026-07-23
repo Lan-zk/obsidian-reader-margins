@@ -8,13 +8,13 @@ function mkDoc(path: string, anns: AnnotationRecordV1[]): PluginDataV1 {
   for (const a of anns) map[a.id] = a;
   return {
     schemaVersion: 1, stateRevision: 0,
-    settings: { colors: [{ id: "y", name: "Y", value: "#fff15c" }], defaultColorId: "y", language: "auto", autoOpenEdit: true },
+    settings: { colors: [{ id: "y", name: "Y", value: "#fff15c" }], defaultColorId: "y", language: "auto", autoOpenEdit: true, defaultDisplayMode: "card", popoverGraceMs: 180 },
     documents: { [path]: { documentId: "d1", sourceSignature: { pdfFingerprint: "fp", numPages: 3 }, revision: 0, annotations: map } },
   };
 }
 function mkAnn(id: string, page: number, y: number): AnnotationRecordV1 {
   return {
-    id, revision: 1, type: "text-mark", markStyle: "highlight",
+    id, revision: 1, type: "text-mark", markStyle: "highlight", displayMode: "card",
     colorIdSnapshot: "y", colorLabelSnapshot: "Y", colorValueSnapshot: "#fff15c",
     anchor: { kind: "pdf-text", version: 1, pageNumber: page,
       quote: { exact: "x", normalization: "collapse-whitespace-v1" },

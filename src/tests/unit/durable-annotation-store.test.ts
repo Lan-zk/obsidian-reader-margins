@@ -374,4 +374,79 @@ describe("DurableAnnotationStore", () => {
     expect(changes).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
   });
+
+  // finalize() is the unload path (main.ts registers it). It must write the
+  // latest full snapshot so unsaved mutations survive a plugin reload that
+  // Obsidian performs without awaiting async cleanup.
+  it("finalize writes the latest full snapshot including mutations made after the last drain", async () => {
+    const saved: number[] = [];
+    const save = vi.fn(async (data: any) => { saved.push(data.stateRevision); });
+    const s = new DurableAnnotationStore(save);
+    s.loadAndValidate(null);
+    // Mutate after load. The coordinator's drain is async; finalize must save
+    // the current snapshot regardless of whether drain has picked it up.
+    s.create("a.pdf", input(), SIG);
+    s.create("a.pdf", input(2), SIG);
+    await s.finalize();
+    // The last persisted snapshot includes both annotations.
+    const last = save.mock.calls.at(-1)![0];
+    expect(Object.keys(last.documents["a.pdf"].annotations)).toHaveLength(2);
+    expect(saved.at(-1)).toBe(s.data.stateRevision);
+  });
+
+  it("finalize seals the store: later mutations do not enqueue saves", async () => {
+    const save = vi.fn(async () => {});
+    const s = new DurableAnnotationStore(save);
+    s.loadAndValidate(null);
+    await s.finalize();
+    save.mockClear();
+    s.create("a.pdf", input(), SIG); // mutation after finalize
+    // Give any stray drain a chance to fire.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  // displayMode: each annotation carries a "card" | "popover" display form.
+  // New annotations inherit settings.defaultDisplayMode; update() can patch it;
+  // setDisplayModeForAll is the bulk toolbar action (atomic, single revision).
+  it("create stamps displayMode from settings.defaultDisplayMode", () => {
+    const s = new DurableAnnotationStore(async () => {});
+    s.loadAndValidate(null);
+    s.data.settings.defaultDisplayMode = "popover";
+    const r = s.create("a.pdf", input(), SIG);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.annotation.displayMode).toBe("popover");
+    // Default is "card".
+    s.data.settings.defaultDisplayMode = "card";
+    const r2 = s.create("a.pdf", input(2), SIG);
+    if (r2.ok) expect(r2.annotation.displayMode).toBe("card");
+  });
+  it("update patches displayMode", () => {
+    const s = new DurableAnnotationStore(async () => {});
+    s.loadAndValidate(null);
+    const created = s.create("a.pdf", input(), SIG);
+    if (!created.ok) throw new Error(created.reason);
+    const r = s.update("a.pdf", created.annotation.id, { displayMode: "popover" }, created.annotation.revision);
+    expect(r.ok).toBe(true);
+    expect(s.byId("a.pdf", created.annotation.id)?.displayMode).toBe("popover");
+  });
+  it("setDisplayModeForAll atomically sets every annotation's displayMode in one revision bump", () => {
+    const save = vi.fn(async () => {});
+    const s = new DurableAnnotationStore(save);
+    s.loadAndValidate(null);
+    s.create("a.pdf", input(1), SIG);
+    s.create("a.pdf", input(2), SIG);
+    s.create("b.pdf", input(1), { pdfFingerprint: "fp-b", numPages: 3 });
+    const before = s.data.stateRevision;
+    const result = s.setDisplayModeForAll("a.pdf", "popover");
+    expect(result).toEqual({ ok: true, changed: 2 });
+    expect(s.data.stateRevision).toBe(before + 1); // single bump, not one-per-annotation
+    expect(s.byPath("a.pdf").every((a) => a.displayMode === "popover")).toBe(true);
+    expect(s.byPath("b.pdf").every((a) => a.displayMode === "card")).toBe(true); // other docs untouched
+  });
+  it("setDisplayModeForAll refuses a readonly store", () => {
+    const s = new DurableAnnotationStore(async () => {});
+    s.loadAndValidate({ schemaVersion: 2 }); // future -> readonly
+    expect(s.setDisplayModeForAll("a.pdf", "popover")).toEqual({ ok: false, reason: "store is read-only" });
+  });
 });

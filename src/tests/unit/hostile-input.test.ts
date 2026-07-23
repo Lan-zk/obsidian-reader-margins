@@ -67,4 +67,62 @@ describe("hostile-input hardening", () => {
     expect(isReplaceableSnapshot({}, "doc-1")).toBe(false);
     expect(isReplaceableSnapshot({ "reader-margins-export": false }, "doc-1")).toBe(false);
   });
+
+  // displayMode (card | popover) is the per-annotation display-form field. It
+  // must fail closed to "card" (the current, backwards-compatible behavior) for
+  // any missing/invalid value so old data and hostile input cannot force an
+  // unknown render path.
+  it.each([
+    ["missing", undefined],
+    ["non-string", 42],
+    ["unknown value", "tooltip"],
+    ["empty string", ""],
+  ])("displayMode %s defaults to 'card'", (_label, displayMode) => {
+    const raw = pluginDataWithCardPosition(undefined);
+    (raw as any).documents["a.pdf"].annotations.a1.displayMode = displayMode;
+    const parsed = parsePluginData(raw);
+    expect(parsed.data!.documents["a.pdf"].annotations.a1.displayMode).toBe("card");
+  });
+  it("displayMode 'card' and 'popover' are preserved", () => {
+    for (const mode of ["card", "popover"] as const) {
+      const raw = pluginDataWithCardPosition(undefined);
+      (raw as any).documents["a.pdf"].annotations.a1.displayMode = mode;
+      const parsed = parsePluginData(raw);
+      expect(parsed.data!.documents["a.pdf"].annotations.a1.displayMode).toBe(mode);
+    }
+  });
+  it("settings.defaultDisplayMode defaults to 'card' for missing/invalid values", () => {
+    for (const v of [undefined, 1, "tooltip", null]) {
+      const raw = {
+        schemaVersion: 1,
+        settings: { colors: [{ id: "y", name: "Y", value: "#fff15c" }], defaultColorId: "y", defaultDisplayMode: v },
+        documents: {},
+      };
+      expect(parsePluginData(raw).data!.settings.defaultDisplayMode).toBe("card");
+    }
+  });
+  it.each([
+    ["missing", undefined],
+    ["non-number", "180"],
+    ["below range", 50],
+    ["above range", 2000],
+    ["NaN", Number.NaN],
+  ])("settings.popoverGraceMs %s defaults to 180 (clamped to 100-1000)", (_label, v) => {
+    const raw = {
+      schemaVersion: 1,
+      settings: { colors: [{ id: "y", name: "Y", value: "#fff15c" }], defaultColorId: "y", popoverGraceMs: v },
+      documents: {},
+    };
+    expect(parsePluginData(raw).data!.settings.popoverGraceMs).toBe(180);
+  });
+  it("settings.popoverGraceMs preserves valid in-range values (100 and 1000 boundaries)", () => {
+    for (const v of [100, 180, 500, 1000]) {
+      const raw = {
+        schemaVersion: 1,
+        settings: { colors: [{ id: "y", name: "Y", value: "#fff15c" }], defaultColorId: "y", popoverGraceMs: v },
+        documents: {},
+      };
+      expect(parsePluginData(raw).data!.settings.popoverGraceMs).toBe(v);
+    }
+  });
 });

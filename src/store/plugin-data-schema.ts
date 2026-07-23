@@ -1,8 +1,10 @@
 // src/store/plugin-data-schema.ts
 import { DEFAULT_COLORS, DEFAULT_COLOR_ID, validateHexColor, normalizeColors, type ColorConfigV1 } from "src/domain/colors";
 import { DEFAULT_LANGUAGE, isLanguage, type Language } from "src/i18n";
-import type { AnnotationRecordV1, CardPositionV1 } from "src/domain/annotation";
+import type { AnnotationRecordV1, CardPositionV1, DisplayMode } from "src/domain/annotation";
 import type { AnchorRect } from "src/domain/pdf-text-anchor";
+
+export type AnnotationDisplayMode = DisplayMode;
 
 export interface PluginSettingsV1 {
   colors: ColorConfigV1[];
@@ -12,6 +14,14 @@ export interface PluginSettingsV1 {
   // immediately on creation so the user can type without a second click. The
   // plain "mark only" actions never auto-open regardless of this setting.
   autoOpenEdit: boolean;
+  // Display form for newly created annotations: "card" (persistent margin card,
+  // default) or "popover" (mark only; floating card on hover). Per-annotation
+  // displayMode can be toggled individually later.
+  defaultDisplayMode: AnnotationDisplayMode;
+  // Hover grace period (ms) before a popover card hides after the pointer leaves
+  // the mark/card. Gives the user time to move from the mark into the card.
+  // Clamped to [100, 1000] on load; default 180.
+  popoverGraceMs: number;
 }
 
 export interface PdfAnnotationDocumentV1 {
@@ -34,9 +44,17 @@ export function makeDefaultData(): PluginDataV1 {
   return {
     schemaVersion: 1,
     stateRevision: 0,
-    settings: { colors: DEFAULT_COLORS.map((c) => ({ ...c })), defaultColorId: DEFAULT_COLOR_ID, language: DEFAULT_LANGUAGE, autoOpenEdit: true },
+    settings: { colors: DEFAULT_COLORS.map((c) => ({ ...c })), defaultColorId: DEFAULT_COLOR_ID, language: DEFAULT_LANGUAGE, autoOpenEdit: true, defaultDisplayMode: "card", popoverGraceMs: 180 },
     documents: {},
   };
+}
+
+function isDisplayMode(v: unknown): v is AnnotationDisplayMode {
+  return v === "card" || v === "popover";
+}
+
+function asGraceMs(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) && v >= 100 && v <= 1000 ? v : 180;
 }
 
 export function parsePluginData(raw: unknown): { state: DataLoadState; data: PluginDataV1 | null } {
@@ -55,6 +73,8 @@ export function parsePluginData(raw: unknown): { state: DataLoadState; data: Plu
   if (!colors.some((c) => c.id === defaultColorId)) return { state: "invalid", data: null };
   const language = isLanguage(settings.language) ? settings.language : DEFAULT_LANGUAGE;
   const autoOpenEdit = typeof settings.autoOpenEdit === "boolean" ? settings.autoOpenEdit : true;
+  const defaultDisplayMode = isDisplayMode(settings.defaultDisplayMode) ? settings.defaultDisplayMode : "card";
+  const popoverGraceMs = asGraceMs(settings.popoverGraceMs);
 
   const documents = r.documents;
   if (documents !== undefined && (typeof documents !== "object" || documents === null)) {
@@ -66,7 +86,7 @@ export function parsePluginData(raw: unknown): { state: DataLoadState; data: Plu
     data: {
       schemaVersion: 1,
       stateRevision: typeof r.stateRevision === "number" ? r.stateRevision : 0,
-      settings: { colors, defaultColorId, language, autoOpenEdit },
+      settings: { colors, defaultColorId, language, autoOpenEdit, defaultDisplayMode, popoverGraceMs },
       documents: sanitizeDocuments(documents),
     },
   };
@@ -157,6 +177,7 @@ function sanitizeAnnotation(raw: unknown): AnnotationRecordV1 | null {
     revision: a.revision,
     type: "text-mark",
     markStyle: a.markStyle,
+    displayMode: isDisplayMode(a.displayMode) ? a.displayMode : "card",
     colorIdSnapshot: typeof a.colorIdSnapshot === "string" ? a.colorIdSnapshot : undefined,
     colorLabelSnapshot: a.colorLabelSnapshot,
     colorValueSnapshot: a.colorValueSnapshot,

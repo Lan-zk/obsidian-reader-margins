@@ -2,7 +2,7 @@
 import { parsePluginData, makeDefaultData, sanitizeCardPosition, type PluginDataV1, type DataLoadState } from "src/store/plugin-data-schema";
 import { AnnotationIndexes } from "src/store/indexes";
 import { PersistenceCoordinator, type PersistenceStatus } from "src/store/persistence-coordinator";
-import type { AnnotationRecordV1, CreateAnnotationInput, MutationResult, DocumentSignature } from "src/domain/annotation";
+import type { AnnotationRecordV1, CreateAnnotationInput, MutationResult, DocumentSignature, DisplayMode } from "src/domain/annotation";
 import { normalizeColors, canDeleteColor, validateSettingsMutation, MAX_COLORS, DEFAULT_COLORS, DEFAULT_COLOR_ID } from "src/domain/colors";
 import { isLanguage, DEFAULT_LANGUAGE, type Language } from "src/i18n";
 
@@ -129,6 +129,7 @@ export class DurableAnnotationStore {
     const now = new Date().toISOString();
     const record: AnnotationRecordV1 = {
       id, revision: 1, type: "text-mark", markStyle: input.markStyle,
+      displayMode: input.displayMode ?? this.data.settings.defaultDisplayMode,
       colorIdSnapshot: input.colorId, colorLabelSnapshot: input.colorLabel, colorValueSnapshot: input.colorValue,
       comment: input.comment, anchor: input.anchor, createdAt: now, updatedAt: now,
     };
@@ -139,13 +140,20 @@ export class DurableAnnotationStore {
     return { ok: true, annotation: structuredClone(record), revision: this.data.stateRevision };
   }
 
-  update(path: string, id: string, patch: Partial<Pick<AnnotationRecordV1, "comment" | "markStyle" | "colorValueSnapshot" | "colorLabelSnapshot" | "colorIdSnapshot" | "cardPosition">>, baseRevision: number): MutationResult {
+  update(path: string, id: string, patch: Partial<Pick<AnnotationRecordV1, "comment" | "markStyle" | "colorValueSnapshot" | "colorLabelSnapshot" | "colorIdSnapshot" | "cardPosition" | "displayMode">>, baseRevision: number): MutationResult {
     if (this.isReadonly) return { ok: false, reason: "store is read-only" };
     const doc = this.data.documents[path];
     const ann = doc?.annotations[id];
     if (!ann) return { ok: false, reason: "annotation not found" };
     if (ann.revision !== baseRevision) return { ok: false, reason: "revision conflict; annotation was modified elsewhere" };
     const applied = { ...patch };
+    // Reject an invalid displayMode rather than silently dropping it; the caller
+    // learns the mutation did not apply (spec §5.9: invalid stays unpersisted).
+    if (Object.prototype.hasOwnProperty.call(applied, "displayMode") && applied.displayMode !== undefined) {
+      if (applied.displayMode !== "card" && applied.displayMode !== "popover") {
+        return { ok: false, reason: "invalid displayMode" };
+      }
+    }
     // This legacy v1 field deliberately has mixed coordinates: y is page-local
     // scale-1 CSS, while x is viewer-container content px. Only y can be
     // normalized durably against the annotation page. Current layout bounds,
@@ -200,6 +208,33 @@ export class DurableAnnotationStore {
     return { ok: true, annotation: structuredClone(restored), revision: this.data.stateRevision };
   }
 
+  // Bulk display-mode conversion (toolbar "convert all" action). Sets every
+  // annotation in one document to the same displayMode in a single atomic
+  // mutation: one revision bump, one change event, one persistence enqueue.
+  // Returns the count of changed annotations (idempotent: already-matching
+  // annotations are not counted as changed but the revision still bumps once
+  // if anything changed). Read-only stores refuse (spec §5.9).
+  setDisplayModeForAll(path: string, mode: DisplayMode): { ok: true; changed: number } | { ok: false; reason: string } {
+    if (this.isReadonly) return { ok: false, reason: "store is read-only" };
+    const doc = this.data.documents[path];
+    if (!doc) return { ok: true, changed: 0 };
+    let changed = 0;
+    const changes: ChangeEntry[] = [];
+    for (const ann of Object.values(doc.annotations)) {
+      if (ann.displayMode === mode) continue;
+      ann.displayMode = mode;
+      ann.revision++;
+      ann.updatedAt = new Date().toISOString();
+      changed++;
+      changes.push({ id: ann.id, page: ann.anchor.pageNumber, kind: "updated" });
+    }
+    if (changed === 0) return { ok: true, changed: 0 };
+    doc.revision++;
+    this.data.stateRevision++;
+    this.commit(path, changes);
+    return { ok: true, changed };
+  }
+
   // --- Settings mutations (spec §13.3) ---
   // Renaming/changing a color value does NOT write back to existing annotation
   // snapshots; only future creates and the toolbar reflect the new settings.
@@ -246,6 +281,8 @@ export class DurableAnnotationStore {
       defaultColorId: DEFAULT_COLOR_ID,
       language: DEFAULT_LANGUAGE,
       autoOpenEdit: true,
+      defaultDisplayMode: "card",
+      popoverGraceMs: 180,
     };
     this.commitSettings();
   }

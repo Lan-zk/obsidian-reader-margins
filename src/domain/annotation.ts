@@ -3,6 +3,11 @@ import type { PdfTextAnchorV1 } from "src/domain/pdf-text-anchor";
 
 export type MarkStyle = "highlight" | "underline";
 
+// Per-annotation display form. "card" = persistent card in the page margin
+// (current behavior). "popover" = mark only; a floating card (same .rm-card
+// styles) appears on hover. See docs/design popover pass for the render rules.
+export type DisplayMode = "card" | "popover";
+
 // Legacy v1 mixed-coordinate card position. `space` describes y only: y is
 // page-local scale-1 CSS (page-relative and zoom-stable), while x is viewer-
 // container content px. Current window, rail, and card-size clamps are transient
@@ -19,6 +24,7 @@ export interface AnnotationRecordV1 {
   revision: number;
   type: "text-mark";
   markStyle: MarkStyle;
+  displayMode: DisplayMode;
   colorIdSnapshot?: string;
   colorLabelSnapshot: string;
   colorValueSnapshot: string; // validated #RRGGBB
@@ -31,6 +37,7 @@ export interface AnnotationRecordV1 {
 
 export interface CreateAnnotationInput {
   markStyle: MarkStyle;
+  displayMode?: DisplayMode; // absent = inherit settings.defaultDisplayMode
   colorId: string;
   colorLabel: string;
   colorValue: string;

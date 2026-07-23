@@ -11,7 +11,7 @@ function callbacks(): CardCallbacks {
   return {
     onHover: vi.fn(), onDragStart: vi.fn(), onResetPosition: vi.fn(),
     onEdit: vi.fn(), onDraftUpdate: vi.fn(), onCommitComment: vi.fn(),
-    onCancelEdit: vi.fn(), onChangeColor: vi.fn(), onToggleType: vi.fn(), onDelete: vi.fn(),
+    onCancelEdit: vi.fn(), onChangeColor: vi.fn(), onToggleType: vi.fn(), onChangeDisplayMode: vi.fn(), onDelete: vi.fn(),
   };
 }
 

@@ -33,6 +33,9 @@ const ICONS: Record<string, IconDef> = {
   download: { paths: ["M12 15V3", "M7 10l5 5 5-5", "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"] },
   // lucide grip-vertical (filled dots)
   grip: { circles: [[9, 5, 1.5], [9, 12, 1.5], [9, 19, 1.5], [15, 5, 1.5], [15, 12, 1.5], [15, 19, 1.5]] },
+  // lucide square-arrow-out-up-right (popout): used for the card<->popover convert
+  // button. Suggests "float out as a popover" / "pop back into a card".
+  popover: { paths: ["M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6", "M21 3l-6 6", "M15 3h6v6"] },
 };
 
 export type IconName = keyof typeof ICONS;

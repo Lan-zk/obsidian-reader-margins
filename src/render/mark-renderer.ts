@@ -11,6 +11,10 @@ export function drawEphemeralMark(
   style: MarkStyle,
   scale: number,
   annotationId?: string,
+  // When true, a small "has note" dot is drawn at the mark's top-right corner so
+  // popover-mode marks (no visible card) can be spotted at a glance. The dot is
+  // a sibling of the opacity group, not a child, so it stays fully opaque.
+  hasNote?: boolean,
 ): void {
   let layer = pageEl.querySelector<HTMLElement>(".rm-mark-layer");
   if (!layer) {
@@ -33,6 +37,7 @@ export function drawEphemeralMark(
   // (hover "taut" lift must not dim underlines - they have no group opacity).
   group.className = `rm-mark-group rm-mark-group-${style}`;
   if (annotationId) group.dataset.annotationId = annotationId;
+  if (hasNote) group.classList.add("rm-mark-group-has-note");
   if (style === "highlight") {
     // 0.42 (was 0.35): bolder presence - the mark must hold its own next to the
     // saturated card border and connector (bolder pass: color as thread).
@@ -59,6 +64,18 @@ export function drawEphemeralMark(
     group.appendChild(el);
   }
   layer.appendChild(group);
+  if (hasNote) {
+    // Dot at the top-right corner of the first rect. Sibling of the group so the
+    // group's 0.42 opacity does not dim it. A surface-colored ring (box-shadow)
+    // keeps it readable on any page background.
+    const first = rects[0];
+    const dot = doc.createElement("div");
+    dot.className = "rm-mark-note-dot";
+    dot.style.left = `${(first.x + first.width) * scale - 3}px`;
+    dot.style.top = `${first.y * scale - 4}px`;
+    dot.style.background = color;
+    layer.appendChild(dot);
+  }
 }
 
 export function setMarkHover(pageEl: HTMLElement, annotationId: string, on: boolean): void {

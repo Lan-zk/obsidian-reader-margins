@@ -43,9 +43,29 @@
 /* Underline: pill ends (Soft-Square), a confident 2.5px stroke. */
 .rm-mark-underline { border-radius: 9999px; }
 
+/* "Has note" dot on popover-mode marks that carry a comment. The card is hidden
+   (hover only), so the dot is the at-a-glance cue that a comment exists. Sibling
+   of the opacity group so it stays fully opaque; a surface ring keeps it visible
+   on any page background. */
+.rm-mark-note-dot {
+  position: absolute;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px var(--rm-surface);
+  pointer-events: none;
+  z-index: 3;
+}
+
 /* --- Card rails ----------------------------------------------------------- */
 .rm-card-rail { position: absolute; inset: 0; left: 0; right: 0; pointer-events: none; z-index: 10; }
 .rm-card-rail-left, .rm-card-rail-right { left: 0; right: 0; }
+
+/* Popover layer: hosts hover-triggered .rm-card instances (popover display mode
+   + card-mode reactive fallback in narrow margins). The card itself reuses the
+   .rm-card styles unchanged; only the layer needs positioning + z-index. The
+   layer is pointer-events:none so it never blocks the PDF; each card opts back
+   in via .rm-card's own pointer-events:auto. */
+.rm-popover-layer { position: absolute; inset: 0; pointer-events: none; z-index: 20; }
 .rm-page-card-rail {
   inset: auto;
   box-sizing: border-box;
@@ -169,18 +189,18 @@
 }
 /* Icon buttons: save / cancel / delete / type-toggle (consistent 2px-stroke SVG icons, scaled).
    24px target (was 22 - off-grid AND below comfortable click size). */
-.rm-card-delete, .rm-card-save, .rm-card-cancel, .rm-card-toggle {
+.rm-card-delete, .rm-card-save, .rm-card-cancel, .rm-card-toggle, .rm-card-convert {
   display: inline-flex; align-items: center; justify-content: center;
   width: 24px; height: 24px; background: transparent;
   border: 1px solid var(--rm-outline-variant); border-radius: 4px;
   cursor: pointer; padding: 0; color: var(--rm-on-surface);
   transition: background-color 120ms var(--rm-ease-out-quart), border-color 120ms var(--rm-ease-out-quart), color 120ms var(--rm-ease-out-quart);
 }
-.rm-card-delete:hover, .rm-card-save:hover, .rm-card-cancel:hover, .rm-card-toggle:hover {
+.rm-card-delete:hover, .rm-card-save:hover, .rm-card-cancel:hover, .rm-card-toggle:hover, .rm-card-convert:hover {
   background-color: var(--rm-surface-2); border-color: var(--rm-outline);
 }
 .rm-card-delete:hover { color: var(--rm-error); border-color: var(--rm-error); }
-.rm-card-delete svg, .rm-card-save svg, .rm-card-cancel svg, .rm-card-toggle svg { display: block; }
+.rm-card-delete svg, .rm-card-save svg, .rm-card-cancel svg, .rm-card-toggle svg, .rm-card-convert svg { display: block; }
 .rm-card-edit {
   width: 100%; min-height: 44px; font-size: 13px; line-height: 18px;
   font-family: inherit; background: var(--rm-surface); color: var(--rm-on-surface);
@@ -357,7 +377,7 @@
 /* --- Reduced motion ------------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
   .rm-card, .rm-color-swatch, .rm-color-swatch-dot, .rm-connector path, .rm-connector circle,
-  .rm-card-delete, .rm-card-save, .rm-card-cancel, .rm-card-toggle, .rm-card-grip,
+  .rm-card-delete, .rm-card-save, .rm-card-cancel, .rm-card-toggle, .rm-card-convert, .rm-card-grip,
   .rm-toolbar-highlight, .rm-toolbar-underline, .rm-toolbar-export, .rm-card-ops, .rm-card-edit {
     transition: none !important; animation: none !important;
   }

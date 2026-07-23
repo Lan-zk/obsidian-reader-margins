@@ -12,6 +12,7 @@ export interface ToolbarCallbacks {
   onHighlight: () => void;
   onUnderline: () => void;
   onExport: () => void;
+  onConvertAll: () => void;
 }
 
 export class ToolbarController {
@@ -26,6 +27,7 @@ export class ToolbarController {
   private highlightBtn: HTMLElement | null = null;
   private underlineBtn: HTMLElement | null = null;
   private exportBtn: HTMLElement | null = null;
+  private convertBtn: HTMLElement | null = null;
   private separator: HTMLElement | null = null;
   private t: Translate;
 
@@ -54,11 +56,13 @@ export class ToolbarController {
       this.highlightBtn = this.makeIconButton("rm-toolbar-highlight", "highlighter", this.t("toolbar.highlightBtn"), () => this.callbacks?.onHighlight());
       this.underlineBtn = this.makeIconButton("rm-toolbar-underline", "underline", this.t("toolbar.underline"), () => this.callbacks?.onUnderline());
       this.exportBtn = this.makeIconButton("rm-toolbar-export", "download", this.t("toolbar.export"), () => this.callbacks?.onExport());
+      this.convertBtn = this.makeIconButton("rm-toolbar-convert", "popover", this.t("toolbar.convertAll"), () => this.callbacks?.onConvertAll());
+      this.convertBtn.setAttribute("aria-pressed", "false");
       const doc = this.root.ownerDocument;
       this.separator = doc.createElement("span");
       this.separator.className = "rm-toolbar-separator";
-      this.root.append(this.separator, this.highlightBtn!, this.underlineBtn, this.exportBtn);
-      this.scope.addDispose(() => { this.highlightBtn?.remove(); this.underlineBtn?.remove(); this.exportBtn?.remove(); this.separator?.remove(); });
+      this.root.append(this.separator, this.highlightBtn!, this.underlineBtn, this.exportBtn, this.convertBtn);
+      this.scope.addDispose(() => { this.highlightBtn?.remove(); this.underlineBtn?.remove(); this.exportBtn?.remove(); this.convertBtn?.remove(); this.separator?.remove(); });
     }
     this.rerenderSwatches();
   }
@@ -78,6 +82,10 @@ export class ToolbarController {
     if (this.exportBtn) {
       this.exportBtn.title = t("toolbar.export");
       this.exportBtn.setAttribute("aria-label", t("toolbar.export"));
+    }
+    if (this.convertBtn) {
+      this.convertBtn.title = t("toolbar.convertAll");
+      this.convertBtn.setAttribute("aria-label", t("toolbar.convertAll"));
     }
     this.rerenderSwatches();
   }
@@ -138,6 +146,12 @@ export class ToolbarController {
   }
 
   setStatus(s: PersistenceStatus): void { this.statusView.update(s); }
+
+  // Reflect "all annotations are popover" on the convert-all button so it reads
+  // as a two-state toggle (aria-pressed). Called after reconcile/change events.
+  setConvertAllState(allPopover: boolean): void {
+    this.convertBtn?.setAttribute("aria-pressed", String(allPopover));
+  }
 
   // One-shot success pulse on the export button (delight pass): primary-color
   // flash for 700ms, then back to normal. The timer is owned by this scope so
