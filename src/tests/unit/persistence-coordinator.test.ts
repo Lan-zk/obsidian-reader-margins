@@ -74,4 +74,72 @@ describe("PersistenceCoordinator", () => {
     expect(statuses.at(-1)).toBe("saved:5");
     expect(save.mock.calls.at(-1)![0].stateRevision).toBe(5);
   });
+
+  // finalize() is the unload path. Obsidian does not await onunload/register
+  // callbacks, so flushBestEffort() (which only returns the in-flight promise)
+  // can leave the newest snapshot unsaved. finalize() writes the latest full
+  // snapshot, chained after any in-flight save so an older snapshot cannot
+  // overwrite it (spec §5.1).
+  it("finalize saves the latest snapshot when nothing is in flight", async () => {
+    const save = vi.fn(async (_d: PluginDataV1) => {});
+    const coord = new PersistenceCoordinator(save);
+    await coord.finalize({ ...makeDefaultData(), stateRevision: 7 });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0][0].stateRevision).toBe(7);
+  });
+
+  it("finalize chains after an in-flight save so the newest snapshot is written last", async () => {
+    let resolveFirst: () => void = () => {};
+    const save = vi.fn((d: PluginDataV1) => {
+      if (d.stateRevision === 1) return new Promise<void>((res) => { resolveFirst = res; });
+      return Promise.resolve();
+    });
+    const coord = new PersistenceCoordinator(save);
+    // rev1 is in flight (blocked); rev2 is pending.
+    coord.enqueue({ ...makeDefaultData(), stateRevision: 1 }, 1);
+    coord.enqueue({ ...makeDefaultData(), stateRevision: 2 }, 2);
+    expect(save).toHaveBeenCalledTimes(1); // rev1 saving
+    // finalize with rev3 (the newest full snapshot). Must not fire until rev1 completes.
+    const finalizeP = coord.finalize({ ...makeDefaultData(), stateRevision: 3 });
+    expect(save).toHaveBeenCalledTimes(1); // still only rev1 in flight
+    resolveFirst();
+    await finalizeP;
+    // rev3 (the finalize snapshot) is the last write; rev2's pending is dropped
+    // because rev3 is a newer full snapshot that supersedes it.
+    expect(save.mock.calls.at(-1)![0].stateRevision).toBe(3);
+  });
+
+  it("finalize drops a pending older snapshot and writes the finalized one", async () => {
+    const saved: number[] = [];
+    const save = vi.fn(async (d: PluginDataV1) => { saved.push(d.stateRevision); });
+    const coord = new PersistenceCoordinator(save);
+    coord.enqueue({ ...makeDefaultData(), stateRevision: 1 }, 1);
+    await coord.finalize({ ...makeDefaultData(), stateRevision: 9 });
+    // rev1 may or may not have started, but the last write must be rev9.
+    expect(saved.at(-1)).toBe(9);
+  });
+
+  it("enqueue after finalize is a no-op (coordinator is sealed)", async () => {
+    const save = vi.fn(async (_d: PluginDataV1) => {});
+    const coord = new PersistenceCoordinator(save);
+    await coord.finalize({ ...makeDefaultData(), stateRevision: 4 });
+    coord.enqueue({ ...makeDefaultData(), stateRevision: 5 }, 5);
+    expect(save).toHaveBeenCalledTimes(1); // no second save
+  });
+
+  it("a failed in-flight save does not re-queue after finalize (no older overwrite)", async () => {
+    let resolveFirst: (ok: boolean) => void = () => {};
+    const save = vi.fn((d: PluginDataV1) => {
+      if (d.stateRevision === 1) return new Promise<void>((res, rej) => { resolveFirst = (ok) => (ok ? res() : rej(new Error("disk"))); });
+      return Promise.resolve();
+    });
+    const coord = new PersistenceCoordinator(save, { backoffMs: 5 });
+    coord.enqueue({ ...makeDefaultData(), stateRevision: 1 }, 1);
+    // finalize rev2 while rev1 is in flight, then fail rev1.
+    const finalizeP = coord.finalize({ ...makeDefaultData(), stateRevision: 2 });
+    resolveFirst(false); // rev1 fails
+    await finalizeP;
+    // rev1's failure must not re-queue rev1 after rev2 was written.
+    expect(save.mock.calls.at(-1)![0].stateRevision).toBe(2);
+  });
 });

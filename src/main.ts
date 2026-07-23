@@ -50,7 +50,13 @@ export default class ReaderMarginsPlugin extends Plugin {
     this.viewManager.start(this);
     this.addSettingTab(new ReaderMarginsSettingsTab(this.app, this));
     this.registerCommands();
-    this.register(() => { this.viewManager.stop(); this.store.flushBestEffort(); });
+    // Unload: stop sessions first (disposal commits pending drafts into the
+    // store), then finalize() writes the latest full snapshot. Obsidian does
+    // NOT await onunload/register callbacks, so flushBestEffort() alone could
+    // leave the newest data unsaved. finalize() chains the write after any
+    // in-flight save and seals the coordinator; for local vaults the Node.js
+    // fs write completes in the background after the plugin JS is torn down.
+    this.register(() => { this.viewManager.stop(); void this.store.finalize(); });
   }
 
   private onVaultRename(file: TAbstractFile, oldPath: string): void {

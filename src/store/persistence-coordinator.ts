@@ -20,6 +20,10 @@ export class PersistenceCoordinator {
   private backoffMs: number;
   private readonly maxBackoffMs: number;
   private readonly initialBackoffMs: number;
+  // Sealed by finalize(): the unload path. Once set, enqueue/drain stop
+  // accepting or re-queueing work so a stale older snapshot cannot overwrite
+  // the finalized newest one (spec §5.1).
+  private finalized = false;
 
   constructor(private save: SaveFn, opts: CoordinatorOptions = {}) {
     this.initialBackoffMs = opts.backoffMs ?? 100;
@@ -34,6 +38,7 @@ export class PersistenceCoordinator {
   }
 
   enqueue(data: PluginDataV1, revision: number): void {
+    if (this.finalized) return; // coordinator sealed by finalize()
     this.pending = { data: snapshotData(data), revision };
     this.setStatus({ state: "dirty", revision });
     if (!this.inFlight) void this.drain();
@@ -43,8 +48,27 @@ export class PersistenceCoordinator {
     return this.inFlight ?? Promise.resolve();
   }
 
+  // Best-effort final save on unload. Obsidian does not await onunload or
+  // register callbacks, so flushBestEffort() alone can leave the newest
+  // snapshot unsaved. finalize() writes the latest full snapshot, chained
+  // after any in-flight save so an older snapshot cannot overwrite it. The
+  // coordinator is sealed: pending is dropped (the finalized snapshot is newer
+  // and full) and a failed in-flight save is not re-queued. Returns the chain
+  // so callers/tests can await it; on unload the promise runs to completion in
+  // the background (for local vaults the Node.js fs write outlives the plugin
+  // JS context).
+  finalize(data: PluginDataV1): Promise<void> {
+    this.finalized = true;
+    this.pending = null;
+    const snapshot = snapshotData(data);
+    const prev = this.inFlight;
+    return (prev ?? Promise.resolve())
+      .then(() => this.save(snapshot))
+      .catch(() => { /* best-effort: swallow on unload */ });
+  }
+
   private async drain(): Promise<void> {
-    while (this.pending) {
+    while (this.pending && !this.finalized) {
       const { data, revision } = this.pending;
       this.pending = null;
       this.setStatus({ state: "saving", revision });
@@ -62,7 +86,7 @@ export class PersistenceCoordinator {
           // state), so only re-queue the failed snapshot when nothing newer is
           // waiting. Otherwise the newer pending is saved next and the stale
           // failure is discarded.
-          if (this.pending === null) {
+          if (this.pending === null && !this.finalized) {
             this.pending = { data, revision };
           }
           return new Promise<void>((res) => setTimeout(res, wait));

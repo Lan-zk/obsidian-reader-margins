@@ -50,6 +50,10 @@ export class DurableAnnotationStore {
   onChange(cb: ChangeEvent): () => void { this.changeListeners.add(cb); return () => this.changeListeners.delete(cb); }
   onStatus(cb: (s: PersistenceStatus) => void): () => void { return this.coord.onStatus(cb); }
   flushBestEffort(): Promise<void> { return this.coord.flushBestEffort(); }
+  // Unload path: write the latest full snapshot so unsaved mutations are not
+  // lost when Obsidian tears down the plugin without awaiting async cleanup.
+  // See PersistenceCoordinator.finalize for the ordering/sealing guarantees.
+  finalize(): Promise<void> { return this.coord.finalize(this.data); }
   byPage(path: string, page: number): AnnotationRecordV1[] { return this.indexes.byPage(path, page); }
   byPath(path: string): AnnotationRecordV1[] { return this.indexes.byPath(path); }
   byId(path: string, id: string): AnnotationRecordV1 | undefined { return this.indexes.byId(path, id); }
