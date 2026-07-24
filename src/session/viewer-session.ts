@@ -12,7 +12,8 @@ import { drawEphemeralMark, clearMarks, setMarkHover } from "src/render/mark-ren
 import { buildCard, type CardCallbacks } from "src/render/annotation-card-rail";
 import { clearPageConnectors, drawEphemeralConnector } from "src/render/connector-renderer";
 import { layoutCards } from "src/render/card-layout-engine";
-import { computeCardRailGeometry } from "src/render/card-drag-geometry";
+import { computeCardRailGeometry, CARD_MAX_WIDTH_PX } from "src/render/card-drag-geometry";
+import { CARD_X_MARGIN_ALLOWANCE_PX } from "src/store/plugin-data-schema";
 import { PageCardRailRegistry, type PageCardRailSide } from "src/render/page-card-rail";
 import { computePopoverPlacement } from "src/render/popover-placement";
 import { unionCenter, cleanGeometry, type AnchorRect } from "src/domain/pdf-text-anchor";
@@ -505,6 +506,7 @@ export class ViewerSession {
     // Rebuild only this page. Rail identity and scroll survive while cards and
     // connector endpoints are fresh projections of the current layout.
     clearMarks(pageEl);
+    this.clearInlineCards(pageEl);
     this.cardRails?.clearPageCards(pageNumber);
     clearPageConnectors(container, pageNumber);
 
@@ -533,6 +535,9 @@ export class ViewerSession {
     const offsetY = pageRect.top - containerRect.top + container.scrollTop;
     const containerWidth = container.offsetWidth || containerRect.width || parseFloat(container.style.width) || 0;
     const pageWidth = pageEl.offsetWidth || pageRect.width || anns[0]?.anchor.geometry.pageWidth * scale || 0;
+    // Unscaled (page-css) page width: cardPosition.x is page-local, so the
+    // on-page test compares it against the unscaled page width.
+    const pageWidthCss = pageWidth / scale;
     const viewportLeft = container.scrollLeft;
     const viewportRight = viewportLeft + containerWidth;
     const pageHeight = pageEl.offsetHeight || pageRect.height;
@@ -554,8 +559,14 @@ export class ViewerSession {
       const rects = resolved.rects;
       // Render-mode decision (needed before drawing the mark so a popover-mode
       // mark with a comment gets the has-note dot indicator). Popover display, or
-      // card display with no room for a rail card (narrow), renders mark-only.
-      const renderPopover = ann.displayMode === "popover" || narrow;
+      // card display with no room for a rail card (narrow), renders mark-only --
+      // EXCEPT an on-page card (page-local x in [0, pageWidth]) which stays put
+      // regardless of margin width (the user placed it on the page on purpose).
+      const isEditing = this.editingId === ann.id;
+      const quote = ann.anchor.quote.exact;
+      const isOnPage = ann.cardPosition?.x != null
+        && ann.cardPosition.x >= 0 && ann.cardPosition.x <= pageWidthCss;
+      const renderPopover = ann.displayMode === "popover" || (narrow && !isOnPage);
       const hasNote = renderPopover && !!(ann.comment && ann.comment.trim());
       drawEphemeralMark(pageEl, rects, ann.colorValueSnapshot, ann.markStyle, scale, ann.id, hasNote);
       // Marks are redrawn wholesale - re-apply the hover lift, same as the
@@ -573,6 +584,41 @@ export class ViewerSession {
         continue;
       }
 
+      // Card width is responsive to the margin (same formula for rail and on-page
+      // cards) so dragging a card between margin and page never changes its width.
+      // cardPosition.x is page-local unscaled (page-css-v2); convert to container
+      // content px at this boundary (containerX = pageLeft + x*scale).
+      const horizontal = computeCardRailGeometry({
+        side,
+        containerLeft: container.scrollLeft,
+        containerWidth,
+        pageLeft: offsetX,
+        pageRight: offsetX + pageWidth,
+        storedX: ann.cardPosition?.x != null ? offsetX + ann.cardPosition.x * scale : undefined,
+      });
+
+      if (isOnPage) {
+        // On-page card: pinned in the page's inline layer at (x*scale, y*scale).
+        // No rail, no push-down (user-placed). Reuses buildCard / .rm-card styles.
+        // isOnPage guaranteed cardPosition and its x are defined.
+        const pos = ann.cardPosition!;
+        const layer = this.ensureInlineCardLayer(pageEl);
+        const card = buildCard(layer, {
+          id: ann.id, quote, comment: ann.comment, color: ann.colorValueSnapshot, colorId: ann.colorIdSnapshot,
+          colors: this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name })),
+          markStyle: ann.markStyle,
+          side, anchorY: pos.y * scale, editing: isEditing,
+          draftValue: isEditing ? this.draft.peek(ann.id)?.value : undefined,
+          cardLeft: pos.x! * scale,
+          cardWidth: horizontal.cardWidth,
+        }, this.cardCallbacks(), this.t ?? makeT("auto", "en"));
+        if (this.pendingEnterPages.get(ann.id) === pageNumber) {
+          this.applyCardMotion(card, "rm-card-enter");
+          this.pendingEnterPages.delete(ann.id);
+        }
+        continue;
+      }
+
       const anchorY = (first.y + first.height / 2) * scale;
       const railLeft = side === "left" ? viewportLeft : offsetX + pageWidth;
       const railRight = side === "left" ? offsetX : viewportRight;
@@ -581,16 +627,6 @@ export class ViewerSession {
         left: railLeft, width: Math.max(0, railRight - railLeft),
       });
       if (!rail) continue;
-      const isEditing = this.editingId === ann.id;
-      const quote = ann.anchor.quote.exact;
-      const horizontal = computeCardRailGeometry({
-        side,
-        containerLeft: container.scrollLeft,
-        containerWidth,
-        pageLeft: offsetX,
-        pageRight: offsetX + pageWidth,
-        storedX: ann.cardPosition?.x,
-      });
       const card = buildCard(rail.element, {
         id: ann.id, quote, comment: ann.comment, color: ann.colorValueSnapshot, colorId: ann.colorIdSnapshot,
         colors: this.store.data.settings.colors.map((c) => ({ id: c.id, value: c.value, label: c.name })),
@@ -629,6 +665,28 @@ export class ViewerSession {
     this.redrawPageConnectors(pageNumber);
   }
 
+  // On-page cards live in a layer inside the page element (sibling of the mark
+  // layer) so they ride PDF.js page virtualization like marks. The layer is
+  // pointer-events:none; cards re-enable pointer-events:auto (CSS) so the rest
+  // of the page still receives text-selection events. On-page cards sit at x in
+  // [0, pageWidth] (within the page bounds), so pageEl clipping does not affect
+  // them. (Dragging an on-page card back into the margin is handled by the
+  // drag-layer in beginDrag, which lifts the card out of pageEl for the drag.)
+  private ensureInlineCardLayer(pageEl: HTMLElement): HTMLElement {
+    let layer = pageEl.querySelector<HTMLElement>(".rm-inline-card-layer");
+    if (!layer) {
+      layer = pageEl.ownerDocument.createElement("div");
+      layer.className = "rm-inline-card-layer";
+      pageEl.appendChild(layer);
+    }
+    return layer;
+  }
+
+  private clearInlineCards(pageEl: HTMLElement): void {
+    // Rebuild is replacement, not accumulation (mirrors clearMarks).
+    pageEl.querySelectorAll(".rm-inline-card-layer").forEach((n) => n.remove());
+  }
+
   private redrawPageConnectors(pageNumber: number): void {
     if (!this.handles || this.state !== "attached") return;
     const container = this.handles.viewerContainerEl;
@@ -649,22 +707,42 @@ export class ViewerSession {
       const first = resolved.rects[0];
       const side = resolved.side;
       if (!side) continue;
-      const rail = this.cardRails?.get(pageNumber, side);
-      if (!rail) continue;
-      const card = annotationElement<HTMLElement>(rail.element, ".rm-card", ann.id);
-      if (!card) continue;
-      const cardTop = Number.parseFloat(card.style.top) || 0;
-      const cardHeight = card.offsetHeight || 40;
-      const visibleTop = cardTop - rail.element.scrollTop;
-      if (visibleTop + cardHeight < 0 || visibleTop > pageHeight) continue;
-      const localLeft = Number.parseFloat(card.style.left) || 0;
-      const cardWidth = card.offsetWidth || Number.parseFloat(card.style.width) || 40;
-      const markEdgeX = side === "left"
-        ? offsetX + first.x * scale
-        : offsetX + (first.x + first.width) * scale;
-      const cardEdgeX = rail.localXToContainer(side === "left" ? localLeft + cardWidth : localLeft);
       const markCenterY = offsetY + (first.y + first.height / 2) * scale;
-      const cardCenterY = offsetY + visibleTop + cardHeight / 2;
+      const isOnPage = ann.cardPosition?.x != null
+        && ann.cardPosition.x >= 0 && ann.cardPosition.x <= ann.anchor.geometry.pageWidth;
+      let markEdgeX: number, cardEdgeX: number, cardCenterY: number;
+      if (isOnPage) {
+        // On-page card lives in pageEl's inline layer; its style.left/top are
+        // page-local scaled (x*scale, y*scale) relative to pageEl. Pick the
+        // nearest edges (card vs mark) so the thread is short and does not
+        // cross the mark, regardless of which side the card was dropped on.
+        const card = annotationElement<HTMLElement>(pageEl, ".rm-card", ann.id);
+        if (!card) continue;
+        const localLeft = Number.parseFloat(card.style.left) || 0;
+        const localTop = Number.parseFloat(card.style.top) || 0;
+        const cardWidth = card.offsetWidth || Number.parseFloat(card.style.width) || CARD_MAX_WIDTH_PX;
+        const cardHeight = card.offsetHeight || 40;
+        const cardLeftOfMark = (offsetX + localLeft + cardWidth / 2) < (offsetX + (first.x + first.width / 2) * scale);
+        markEdgeX = cardLeftOfMark ? offsetX + (first.x + first.width) * scale : offsetX + first.x * scale;
+        cardEdgeX = cardLeftOfMark ? offsetX + localLeft + cardWidth : offsetX + localLeft;
+        cardCenterY = offsetY + localTop + cardHeight / 2;
+      } else {
+        const rail = this.cardRails?.get(pageNumber, side);
+        if (!rail) continue;
+        const card = annotationElement<HTMLElement>(rail.element, ".rm-card", ann.id);
+        if (!card) continue;
+        const cardTop = Number.parseFloat(card.style.top) || 0;
+        const cardHeight = card.offsetHeight || 40;
+        const visibleTop = cardTop - rail.element.scrollTop;
+        if (visibleTop + cardHeight < 0 || visibleTop > pageHeight) continue;
+        const localLeft = Number.parseFloat(card.style.left) || 0;
+        const cardWidth = card.offsetWidth || Number.parseFloat(card.style.width) || 40;
+        markEdgeX = side === "left"
+          ? offsetX + first.x * scale
+          : offsetX + (first.x + first.width) * scale;
+        cardEdgeX = rail.localXToContainer(side === "left" ? localLeft + cardWidth : localLeft);
+        cardCenterY = offsetY + visibleTop + cardHeight / 2;
+      }
       const stitching = this.pendingStitchPages.get(ann.id) === pageNumber;
       drawEphemeralConnector(container, {
         x1: markEdgeX, y1: markCenterY, x2: cardEdgeX, y2: cardCenterY,
@@ -1098,9 +1176,15 @@ export class ViewerSession {
     }
   }
 
-  // Drag a card via its grip: live `top` follows the pointer (clamped to the
-  // anchor page's band), committed to the store on pointerup as a page-css y.
-  // Re-render is deferred during the drag so the card element survives.
+  // Free-drag a card via its grip. The card is lifted into a container-level
+  // drag layer for the drag so it can move freely across the page and both
+  // margins without being clipped by a dense rail (overflow:auto) or by pageEl.
+  // Horizontal: free within the page neighborhood (page ± CARD_X_MARGIN_ALLOWANCE
+  // so margin and on-page positions are both reachable). Vertical: the whole card
+  // stays on the anchor page. On pointerup the container position is committed as
+  // a page-local (unscaled) (x, y); reconcile then rebuilds the card in its proper
+  // parent (rail for margin x, inline layer for on-page x) and the drag layer is
+  // removed. Re-render is deferred during the drag (draggingId) so the card survives.
   private beginDrag(id: string, e: PointerEvent, card: HTMLElement): void {
     if (!this.handles) return;
     if (e.button !== 0) return; // primary button only
@@ -1110,32 +1194,28 @@ export class ViewerSession {
     const pageEl = findPageEl(this.handles, ann.anchor.pageNumber);
     if (!pageEl) return;
     const scale = readCurrentScale(this.handles);
-    const pageRect = pageEl.getBoundingClientRect();
-    const cardHeight = card.offsetHeight || 40;
-    const startTop = parseFloat(card.style.top) || 0;          // card top, container-content px
-    const startY = e.clientY;
-    const startCardTopVp = card.getBoundingClientRect().top;   // card top, viewport px
-    const minVp = pageRect.top;                                // page top (viewport)
-    const maxVp = Math.max(minVp, pageRect.bottom - cardHeight); // clamp keeps card inside the page
-    // Horizontal coordinates are container-relative because both rails span the
-    // full container. This keeps stored x stable and gives both sides one model.
     const container = this.handles.viewerContainerEl;
     const containerRect = container.getBoundingClientRect();
+    const pageRect = pageEl.getBoundingClientRect();
+    // Page box in container content px (the card's page-local origin maps here).
+    const pageLeft = pageRect.left - containerRect.left + container.scrollLeft;
+    const pageTop = pageRect.top - containerRect.top + container.scrollTop;
+    const pageWidthPx = pageEl.offsetWidth || pageRect.width;   // scaled
+    const pageHeightPx = pageEl.offsetHeight || pageRect.height; // scaled
     const cardWidth = card.offsetWidth || 40;
-    const startLeft = parseFloat(card.style.left) || 0;
-    const startX = e.clientX;
-    const side = card.closest(".rm-card-rail-left") ? "left" : "right";
-    const rail = this.cardRails?.get(ann.anchor.pageNumber, side);
-    if (!rail) return;
-    const horizontal = computeCardRailGeometry({
-      side,
-      containerLeft: container.scrollLeft,
-      containerWidth: containerRect.width || container.offsetWidth || parseFloat(container.style.width) || 0,
-      pageLeft: pageRect.left - containerRect.left + container.scrollLeft,
-      pageRight: pageRect.right - containerRect.left + container.scrollLeft,
-      storedX: rail.localXToContainer(startLeft),
-      cardWidth,
-    });
+    const cardHeight = card.offsetHeight || 40;
+    // Card's current position in container content px (viewport -> container).
+    const cardRect = card.getBoundingClientRect();
+    const startContainerX = cardRect.left - containerRect.left + container.scrollLeft;
+    const startContainerY = cardRect.top - containerRect.top + container.scrollTop;
+    // Page-neighborhood bound (container content px). Horizontal: page ± the
+    // durable x allowance (matches sanitizeCardPosition, so commit never
+    // surprise-clamps). Vertical: whole card stays on the page.
+    const allowancePx = CARD_X_MARGIN_ALLOWANCE_PX * scale;
+    const minX = pageLeft - allowancePx;
+    const maxX = pageLeft + pageWidthPx + allowancePx - cardWidth;
+    const minY = pageTop;
+    const maxY = Math.max(minY, pageTop + pageHeightPx - cardHeight);
     const baseRevision = ann.revision;
     const dragGeneration = this.generation;
     const grip = card.querySelector<HTMLElement>(".rm-card-grip") ?? card;
@@ -1143,15 +1223,23 @@ export class ViewerSession {
     this.draggingId = id;
     this.dragGeometryStale = false;
     card.classList.add("rm-card-dragging");
+    // Lift the card into a container-level drag layer (at the container origin)
+    // so its left/top become container content px and it is not clipped by its
+    // original parent (rail dense overflow or pageEl).
+    const doc = container.ownerDocument;
+    const dragLayer = doc.createElement("div");
+    dragLayer.className = "rm-card-drag-layer";
+    container.appendChild(dragLayer);
+    dragLayer.appendChild(card);
+    card.style.left = `${startContainerX}px`;
+    card.style.top = `${startContainerY}px`;
+    const startX = e.clientX, startY = e.clientY;
     try { grip.setPointerCapture(e.pointerId); } catch { /* pointer already released */ }
     const onMove = (ev: PointerEvent) => {
-      const dy = ev.clientY - startY;
-      const dx = ev.clientX - startX;
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
       if (Math.abs(dy) > 1 || Math.abs(dx) > 1) moved = true;
-      const nextTopVp = Math.max(minVp, Math.min(startCardTopVp + dy, maxVp));
-      card.style.top = `${startTop + (nextTopVp - startCardTopVp)}px`;
-      const nextContainerLeft = Math.max(horizontal.minX, Math.min(rail.localXToContainer(startLeft) + dx, horizontal.maxX));
-      card.style.left = `${rail.containerXToLocal(nextContainerLeft)}px`;
+      card.style.left = `${Math.max(minX, Math.min(startContainerX + dx, maxX))}px`;
+      card.style.top = `${Math.max(minY, Math.min(startContainerY + dy, maxY))}px`;
     };
     let finished = false;
     const finish = (cancelled: boolean) => {
@@ -1169,13 +1257,26 @@ export class ViewerSession {
       if (this.generation !== dragGeneration || this.state === "disposing" || this.state === "disposed") return;
       // Flush any re-renders deferred during the drag.
       if (this.pendingReconcile.size > 0) this.reconcilePage([...this.pendingReconcile][0]);
-      if (cancelled || stale || !moved) return;
-      const y = (parseFloat(card.style.top) || 0) / scale; // rail/page-local -> page-css-v1
-      const x = rail.localXToContainer(parseFloat(card.style.left) || 0); // durable container-content x
-      this.store.update(this.pdfPath, id, { cardPosition: { space: "page-css-v1", y, x } }, baseRevision);
-      // Settle pulse on the (rebuilt) card: a 180ms 1.02→1 scale acknowledges
-      // "position saved" without shadows or movement (animate pass).
-      this.pulseCard(id, "rm-card-settle");
+      if (!cancelled && !stale && moved) {
+        // Commit the dropped container position as page-local (unscaled) (x, y).
+        const containerX = parseFloat(card.style.left) || 0;
+        const containerY = parseFloat(card.style.top) || 0;
+        const x = (containerX - pageLeft) / scale;
+        const y = (containerY - pageTop) / scale;
+        this.store.update(this.pdfPath, id, { cardPosition: { space: "page-css-v2", x, y } }, baseRevision);
+        // Settle pulse on the (rebuilt) card: a 180ms 1.02->1 scale acknowledges
+        // "position saved" without shadows or movement (animate pass).
+        this.pulseCard(id, "rm-card-settle");
+      } else {
+        // No commit: rebuild the card at its stored position (drag layer removed).
+        this.reconcilePage(ann.anchor.pageNumber);
+      }
+      // The dragged card still lives in the drag layer. Remove the layer after
+      // the reconcile rAF rebuilds the card in its proper parent (rail or inline
+      // layer), so there is no flicker (the rebuilt card lands at the same spot).
+      const win = doc.defaultView;
+      if (win) win.requestAnimationFrame(() => dragLayer.remove());
+      else dragLayer.remove();
     };
     const onUp = () => finish(false);
     const onCancel = () => finish(true);
@@ -1467,6 +1568,7 @@ export class ViewerSession {
       this.handles.viewerContainerEl.querySelectorAll(".rm-card-rail").forEach((rail) => rail.remove());
       this.handles.viewerContainerEl.querySelector(".rm-connector-layer")?.remove();
       this.handles.viewerEl.querySelectorAll(".rm-mark-layer").forEach((n) => n.remove());
+      this.handles.viewerEl.querySelectorAll(".rm-inline-card-layer").forEach((n) => n.remove());
     }
     // Best-effort commit pending drafts before tearing down so unsaved input is
     // not silently lost on view close / plugin unload (H-04). A revision conflict

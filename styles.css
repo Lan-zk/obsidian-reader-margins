@@ -39,6 +39,12 @@
 
 /* --- Marks (highlight / underline) ---------------------------------------- */
 .rm-mark-layer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+/* On-page cards: a layer inside the page element (sibling of the mark layer) so
+   they ride PDF.js page virtualization. pointer-events:none on the layer keeps
+   the page selectable; each card re-enables pointer-events:auto. z-index above
+   marks so the card is not tinted by the highlight group. */
+.rm-inline-card-layer { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.rm-inline-card-layer .rm-card { pointer-events: auto; }
 .rm-mark { position: absolute; pointer-events: none; }
 /* Underline: pill ends (Soft-Square), a confident 2.5px stroke. */
 .rm-mark-underline { border-radius: 9999px; }
@@ -165,6 +171,13 @@
 /* Dragging: follow the pointer without lag, lift above siblings, suppress selection. */
 .rm-card-dragging { z-index: 3; transition: none !important; user-select: none; }
 .rm-card-dragging .rm-card-grip { cursor: grabbing; opacity: 1; }
+/* Transient container-level layer that hosts a card while it is being dragged,
+   so the card can move freely across the page and both margins without being
+   clipped by its origin parent (a dense rail's overflow:auto or pageEl). The
+   layer is pointer-events:none; the card re-enables pointer-events:auto. High
+   z-index so the dragged card floats above other cards and the popover layer. */
+.rm-card-drag-layer { position: absolute; inset: 0; pointer-events: none; z-index: 30; }
+.rm-card-drag-layer .rm-card { pointer-events: auto; }
 .rm-color-swatch {
   display: inline-flex; align-items: center; justify-content: center;
   width: 24px; height: 24px; border-radius: 4px; border: 0; background: transparent;

@@ -43,11 +43,11 @@ describe("hostile-input hardening", () => {
     expect(out).toHaveLength(1);
   });
   it.each([
-    ["non-finite y", { space: "page-css-v1", y: Number.NaN, x: 10 }],
-    ["non-finite x", { space: "page-css-v1", y: 10, x: Number.POSITIVE_INFINITY }],
+    ["non-finite y", { space: "page-css-v2", y: Number.NaN }],
+    ["non-finite x", { space: "page-css-v2", y: 10, x: Number.POSITIVE_INFINITY }],
     ["unknown space", { space: "viewport-v1", y: 10, x: 10 }],
-    ["negative container x", { space: "page-css-v1", y: 10, x: -1 }],
-    ["nonsensical y", { space: "page-css-v1", y: "10", x: 10 }],
+    ["nonsensical y", { space: "page-css-v2", y: "10" }],
+    ["legacy v1 non-finite y", { space: "page-css-v1", y: Number.NaN, x: 10 }],
   ])("rejects a persisted card position with %s", (_label, cardPosition) => {
     const parsed = parsePluginData(pluginDataWithCardPosition(cardPosition));
     expect(parsed.data!.documents["a.pdf"].annotations).toEqual({});
@@ -57,11 +57,12 @@ describe("hostile-input hardening", () => {
     const parsed = parsePluginData(pluginDataWithCardPosition(cardPosition));
     expect(parsed.data!.documents["a.pdf"].annotations).toEqual({});
   });
-  it("normalizes only durable y against the annotation page bounds", () => {
-    const below = parsePluginData(pluginDataWithCardPosition({ space: "page-css-v1", y: -10, x: 10 }));
-    const above = parsePluginData(pluginDataWithCardPosition({ space: "page-css-v1", y: 900, x: 100_000 }));
-    expect(below.data!.documents["a.pdf"].annotations.a1.cardPosition).toEqual({ space: "page-css-v1", y: 0, x: 10 });
-    expect(above.data!.documents["a.pdf"].annotations.a1.cardPosition).toEqual({ space: "page-css-v1", y: 800, x: 100_000 });
+  it("normalizes durable y and page-local x against the annotation page bounds", () => {
+    const below = parsePluginData(pluginDataWithCardPosition({ space: "page-css-v2", y: -10, x: 100_000 }));
+    const above = parsePluginData(pluginDataWithCardPosition({ space: "page-css-v2", y: 900, x: -100_000 }));
+    // geometry pageWidth 600, pageHeight 800: y in [0,800], page-local x in [-480, 1080].
+    expect(below.data!.documents["a.pdf"].annotations.a1.cardPosition).toEqual({ space: "page-css-v2", y: 0, x: 1080 });
+    expect(above.data!.documents["a.pdf"].annotations.a1.cardPosition).toEqual({ space: "page-css-v2", y: 800, x: -480 });
   });
   it("export never overwrites an unknown file", () => {
     expect(isReplaceableSnapshot({}, "doc-1")).toBe(false);

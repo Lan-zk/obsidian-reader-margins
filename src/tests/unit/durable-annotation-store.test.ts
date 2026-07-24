@@ -92,10 +92,10 @@ describe("DurableAnnotationStore", () => {
     expect(stale.ok).toBe(false);
   });
   it.each([
-    ["non-finite y", { space: "page-css-v1", y: Number.NaN, x: 10 }],
-    ["non-finite x", { space: "page-css-v1", y: 10, x: Number.POSITIVE_INFINITY }],
+    ["non-finite y", { space: "page-css-v2", y: Number.NaN }],
+    ["non-finite x", { space: "page-css-v2", y: 10, x: Number.POSITIVE_INFINITY }],
     ["unknown space", { space: "viewport-v1", y: 10, x: 10 }],
-    ["negative container x", { space: "page-css-v1", y: 10, x: -1 }],
+    ["legacy v1 non-finite y", { space: "page-css-v1", y: Number.NaN, x: 10 }],
     ["null payload", null],
   ])("rejects a card-position update with %s without mutation or persistence", async (_label, cardPosition) => {
     const save = vi.fn(async () => {});
@@ -123,21 +123,22 @@ describe("DurableAnnotationStore", () => {
     expect(changes).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
   });
-  it("normalizes durable y to page bounds without viewport-clamping durable x", () => {
+  it("normalizes durable y and page-local x against the annotation page bounds", () => {
     const s = new DurableAnnotationStore(async () => {});
     s.loadAndValidate(null);
     const created = s.create("a.pdf", input(), SIG);
     if (!created.ok) throw new Error(created.reason);
 
     const below = s.update("a.pdf", created.annotation.id,
-      { cardPosition: { space: "page-css-v1", y: -10, x: 100_000 } }, created.annotation.revision);
+      { cardPosition: { space: "page-css-v2", y: -10, x: 100_000 } }, created.annotation.revision);
     if (!below.ok) throw new Error(below.reason);
-    expect(below.annotation.cardPosition).toEqual({ space: "page-css-v1", y: 0, x: 100_000 });
+    // anchor pageWidth 600, pageHeight 800: y in [0,800], page-local x in [-480, 1080].
+    expect(below.annotation.cardPosition).toEqual({ space: "page-css-v2", y: 0, x: 1080 });
 
     const above = s.update("a.pdf", created.annotation.id,
-      { cardPosition: { space: "page-css-v1", y: 900, x: 100_000 } }, below.annotation.revision);
+      { cardPosition: { space: "page-css-v2", y: 900, x: -100_000 } }, below.annotation.revision);
     if (!above.ok) throw new Error(above.reason);
-    expect(above.annotation.cardPosition).toEqual({ space: "page-css-v1", y: 800, x: 100_000 });
+    expect(above.annotation.cardPosition).toEqual({ space: "page-css-v2", y: 800, x: -480 });
   });
   it("keeps read-only and revision-conflict failures ahead of card-position validation", async () => {
     const save = vi.fn(async () => {});

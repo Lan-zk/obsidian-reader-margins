@@ -8,15 +8,17 @@ export type MarkStyle = "highlight" | "underline";
 // styles) appears on hover. See docs/design popover pass for the render rules.
 export type DisplayMode = "card" | "popover";
 
-// Legacy v1 mixed-coordinate card position. `space` describes y only: y is
-// page-local scale-1 CSS (page-relative and zoom-stable), while x is viewer-
-// container content px. Current window, rail, and card-size clamps are transient
-// DOM projection concerns and must not be written back during rendering.
-// Absent on the record = auto-layout (push-down).
+// Card position is fully page-local (`page-css-v2`): BOTH x and y are page-
+// relative, scale-1, top-left origin, so the whole position is zoom-stable and
+// scrolls with the page. x is optional (absent = auto-horizontal via the rail);
+// when present, negative x = left margin, x > pageWidth = right margin, and
+// x in [0, pageWidth] = on the page. Legacy `space: "page-css-v1"` records
+// (y page-local but x viewer-container content px) are migrated to v2 on load
+// (x dropped, y kept). Absent on the record = auto-layout (push-down).
 export interface CardPositionV1 {
-  space: "page-css-v1";
+  space: "page-css-v2";
   y: number; // card top, page-relative, unscaled (scales with zoom)
-  x?: number; // card left in viewer-container content coordinates (zoom-independent); absent = auto
+  x?: number; // card left, page-relative, unscaled; absent = auto-horizontal
 }
 
 export interface AnnotationRecordV1 {

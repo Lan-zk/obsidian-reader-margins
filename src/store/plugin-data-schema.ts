@@ -111,18 +111,36 @@ function ownDataValue(raw: Record<string, unknown>, key: string): unknown {
   return descriptor && "value" in descriptor ? descriptor.value : undefined;
 }
 
-export function sanitizeCardPosition(raw: unknown, pageHeight: number): CardPositionV1 | null {
+// Horizontal allowance (page-local, css px) beyond each page edge so a card may
+// sit in the margin or slightly past it. Generous so free drag is not clipped to
+// the page rect, but finite so a card cannot be lost in unreachable scroll space.
+export const CARD_X_MARGIN_ALLOWANCE_PX = 480;
+
+export function sanitizeCardPosition(raw: unknown, pageWidth: number, pageHeight: number): CardPositionV1 | null {
   if (!isObj(raw) || Object.getPrototypeOf(raw) !== Object.prototype) return null;
   const space = ownDataValue(raw, "space");
   const y = ownDataValue(raw, "y");
+  // Legacy v1 (y page-local, x viewer-container content px): migrate to v2 by
+  // keeping y and dropping x. container-px x cannot be converted to page-local
+  // without runtime layout, and x was re-clamped each render anyway, so dropping
+  // it only resets horizontal to auto. Idempotent: v2 inputs skip this branch.
+  // Unknown spaces fail closed (§5.2).
+  if (space === "page-css-v1") {
+    if (!isFiniteNum(y)) return null;
+    return { space: "page-css-v2", y: Math.max(0, Math.min(y, pageHeight)) };
+  }
+  if (space !== "page-css-v2") return null;
+  if (!isFiniteNum(y)) return null;
   const x = ownDataValue(raw, "x");
-  if (space !== "page-css-v1" || !isFiniteNum(y)) return null;
-  if (x !== undefined && (!isFiniteNum(x) || x < 0)) return null;
-  return {
-    space: "page-css-v1",
-    y: Math.max(0, Math.min(y, pageHeight)),
-    ...(x !== undefined ? { x } : {}),
-  };
+  if (x !== undefined && !isFiniteNum(x)) return null;
+  const clampedY = Math.max(0, Math.min(y, pageHeight));
+  const result: CardPositionV1 = { space: "page-css-v2", y: clampedY };
+  if (x !== undefined) {
+    // x is page-local: negative is valid (left margin), > pageWidth is valid
+    // (right margin). Clamp only to the allowance so it can't run off forever.
+    result.x = Math.max(-CARD_X_MARGIN_ALLOWANCE_PX, Math.min(x, pageWidth + CARD_X_MARGIN_ALLOWANCE_PX));
+  }
+  return result;
 }
 
 function sanitizeAnnotation(raw: unknown): AnnotationRecordV1 | null {
@@ -160,7 +178,7 @@ function sanitizeAnnotation(raw: unknown): AnnotationRecordV1 | null {
 
   let cardPosition: CardPositionV1 | undefined;
   if (a.cardPosition !== undefined) {
-    const sanitized = sanitizeCardPosition(a.cardPosition, geometry.pageHeight);
+    const sanitized = sanitizeCardPosition(a.cardPosition, geometry.pageWidth, geometry.pageHeight);
     if (!sanitized) return null;
     cardPosition = sanitized;
   }

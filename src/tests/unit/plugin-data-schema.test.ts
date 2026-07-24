@@ -71,7 +71,12 @@ describe("parsePluginData", () => {
     expect(r.state).toBe("valid");
     expect(Object.keys(r.data!.documents["a.pdf"].annotations)).toEqual(["good"]);
   });
-  it("preserves a valid legacy mixed-space card position as a fresh plain object", () => {
+  it("migrates a legacy page-css-v1 cardPosition to page-css-v2, dropping container-px x and keeping page-local y", () => {
+    // Legacy v1 stored y page-local but x as viewer-container content px (a
+    // mixed-coordinate wart). v2 makes both axes page-local. container-px x
+    // cannot be converted to page-local without runtime layout, so it is dropped
+    // (x was re-clamped each render anyway); page-local y is preserved. The
+    // result is a fresh plain object (prototype hardened).
     const cardPosition = { space: "page-css-v1", x: 420, y: 780 };
     const r = parsePluginData({
       schemaVersion: 1,
@@ -90,7 +95,30 @@ describe("parsePluginData", () => {
     });
 
     const parsed = r.data!.documents["a.pdf"].annotations.a1.cardPosition;
-    expect(parsed).toEqual(cardPosition);
+    expect(parsed).toEqual({ space: "page-css-v2", y: 780 });
+    expect(parsed).not.toBe(cardPosition);
+    expect(Object.getPrototypeOf(parsed!)).toBe(Object.prototype);
+  });
+  it("preserves a valid page-css-v2 cardPosition (page-local x, including negative margin x) as a fresh plain object", () => {
+    const cardPosition = { space: "page-css-v2", x: -160, y: 780 };
+    const r = parsePluginData({
+      schemaVersion: 1,
+      settings: { colors: [{ id: "y", name: "Y", value: "#fff15c" }], defaultColorId: "y" },
+      documents: { "a.pdf": {
+        documentId: "d1", sourceSignature: { pdfFingerprint: "fp", numPages: 1 }, revision: 1,
+        annotations: { a1: {
+          id: "a1", revision: 1, type: "text-mark", markStyle: "highlight",
+          colorLabelSnapshot: "Y", colorValueSnapshot: "#fff15c", cardPosition,
+          anchor: { kind: "pdf-text", version: 1, pageNumber: 1,
+            quote: { exact: "hi", normalization: "collapse-whitespace-v1" },
+            geometry: { space: "page-css-v1", pageWidth: 600, pageHeight: 800, rotation: 0, rects: [{ x: 0, y: 0, width: 10, height: 10 }] } },
+          createdAt: "t", updatedAt: "t",
+        } },
+      } },
+    });
+
+    const parsed = r.data!.documents["a.pdf"].annotations.a1.cardPosition;
+    expect(parsed).toEqual({ space: "page-css-v2", x: -160, y: 780 });
     expect(parsed).not.toBe(cardPosition);
     expect(Object.getPrototypeOf(parsed!)).toBe(Object.prototype);
   });

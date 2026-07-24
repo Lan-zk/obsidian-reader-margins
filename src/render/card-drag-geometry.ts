@@ -1,5 +1,9 @@
 export const CARD_OUTER_GUTTER_PX = 12;
 export const CARD_PAGE_GAP_PX = 8;
+// Max card width. Margin rail cards are responsive (shrink when the margin is
+// narrow via computeCardRailGeometry); on-page (inline) cards use this as a
+// fixed width so a card dragged onto the page keeps its width and its ops row
+// does not overflow.
 export const CARD_MAX_WIDTH_PX = 240;
 export const CARD_MIN_WIDTH_PX = 136;
 export const CARD_MIN_DRAG_TRAVEL_PX = 24;

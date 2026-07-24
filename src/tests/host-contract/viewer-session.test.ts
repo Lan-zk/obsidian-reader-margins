@@ -472,7 +472,7 @@ describe("ViewerSession (M-1)", () => {
     };
     const created = store.create("test.pdf", { markStyle: "highlight", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c", anchor }, { pdfFingerprint: "fp-a", numPages: 2 });
     if (!created.ok) throw new Error(created.reason);
-    store.update("test.pdf", created.annotation.id, { cardPosition: { space: "page-css-v1", y: 300 } }, created.annotation.revision);
+    store.update("test.pdf", created.annotation.id, { cardPosition: { space: "page-css-v2", y: 300 } }, created.annotation.revision);
 
     const session = new ViewerSession(view as any, "test.pdf", store);
     await session.attach();
@@ -484,7 +484,7 @@ describe("ViewerSession (M-1)", () => {
     expect(card?.closest<HTMLElement>(".rm-page-card-rail")?.style.top).toBe("900px");
     session.dispose();
   });
-  it("moves a card horizontally inside the page margin and persists container-relative x", async () => {
+  it("moves a card horizontally inside the page margin and persists page-local x", async () => {
     const { view, pages, containerEl } = buildHostFixture({ fingerprint: "fp-a", numPages: 1, marginWidthPx: 200 });
     Object.defineProperty(containerEl, "offsetWidth", { value: 1000 });
     Object.defineProperty(containerEl, "getBoundingClientRect", {
@@ -527,7 +527,7 @@ describe("ViewerSession (M-1)", () => {
     grip.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, button: 0, clientX: 50, clientY: 110 }));
     expect(card.style.left).toBe("42px");
     grip.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, button: 0, clientX: 50, clientY: 110 }));
-    expect(store.byId("test.pdf", created.annotation.id)?.cardPosition?.x).toBe(42);
+    expect(store.byId("test.pdf", created.annotation.id)?.cardPosition?.x).toBe(-258);
     session.dispose();
   });
   it("re-clamps a reloaded card only in the DOM while preserving its durable position", async () => {
@@ -583,7 +583,7 @@ describe("ViewerSession (M-1)", () => {
       const reloadSave = vi.fn(async () => {});
       const reloaded = new DurableAnnotationStore(reloadSave);
       expect(reloaded.loadAndValidate(persisted)).toBe("valid");
-      expect(reloaded.byId("test.pdf", created.annotation.id)?.cardPosition).toEqual({ space: "page-css-v1", x: 42, y: 760 });
+      expect(reloaded.byId("test.pdf", created.annotation.id)?.cardPosition).toEqual({ space: "page-css-v2", x: -258, y: 760 });
 
       const second = buildHostFixture({ fingerprint: "fp-a", numPages: 1, marginWidthPx: 200 });
       Object.defineProperty(second.containerEl, "offsetWidth", { value: 800 });
@@ -609,9 +609,9 @@ describe("ViewerSession (M-1)", () => {
       await secondSession.attach();
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
       const reloadedCard = second.containerEl.querySelector<HTMLElement>(`.rm-card[data-annotation-id="${created.annotation.id}"]`)!;
-      expect(reloadedCard.style.left).toBe("36px");
+      expect(reloadedCard.style.left).toBe("12px");
       expect(reloadedCard.style.top).toBe("720px");
-      expect(reloaded.byId("test.pdf", created.annotation.id)?.cardPosition).toEqual({ space: "page-css-v1", x: 42, y: 760 });
+      expect(reloaded.byId("test.pdf", created.annotation.id)?.cardPosition).toEqual({ space: "page-css-v2", x: -258, y: 760 });
       expect(reloadSave).not.toHaveBeenCalled();
     } finally {
       firstSession.dispose();
@@ -619,6 +619,130 @@ describe("ViewerSession (M-1)", () => {
       if (offsetHeightDescriptor) Object.defineProperty(HTMLElement.prototype, "offsetHeight", offsetHeightDescriptor);
       else delete (HTMLElement.prototype as any).offsetHeight;
     }
+  });
+  it("renders an on-page card (page-local x in [0,pageWidth]) in the page inline layer, exempt from narrow popover fallback", async () => {
+    // A card whose page-local x lands within [0, pageWidth] renders ON the page
+    // (in pageEl's .rm-inline-card-layer at (x*scale, y*scale)), not in a margin
+    // rail. It is exempt from the narrow->popover fallback: even when the margin
+    // is too narrow for a rail card, an on-page card stays put.
+    const { view, pages, containerEl } = buildHostFixture({ fingerprint: "fp-a", numPages: 1, marginWidthPx: 60 });
+    Object.defineProperty(containerEl, "offsetWidth", { configurable: true, value: 520 });
+    Object.defineProperty(containerEl, "getBoundingClientRect", { configurable: true, value: () => ({ left: 0, top: 0, width: 520, height: 800, right: 520, bottom: 800 } as DOMRect) });
+    Object.defineProperties(pages[0].el, { offsetWidth: { configurable: true, value: 400 }, offsetHeight: { configurable: true, value: 800 } });
+    Object.defineProperty(pages[0].el, "getBoundingClientRect", { configurable: true, value: () => ({ left: 60, top: 0, width: 400, height: 800, right: 460, bottom: 800 } as DOMRect) });
+    const store = makeStore();
+    const anchor = {
+      kind: "pdf-text" as const, version: 1 as const, pageNumber: 1,
+      quote: { exact: "on page card", normalization: "collapse-whitespace-v1" as const },
+      geometry: { space: "page-css-v1" as const, pageWidth: 400, pageHeight: 800, rotation: 0 as const, rects: [{ x: 10, y: 100, width: 80, height: 14 }] },
+    };
+    const created = store.create("test.pdf", { markStyle: "highlight", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c", anchor }, { pdfFingerprint: "fp-a", numPages: 1 });
+    if (!created.ok) throw new Error(created.reason);
+    // on-page: x=100 is within [0, 400]; y=200.
+    store.update("test.pdf", created.annotation.id, { cardPosition: { space: "page-css-v2", x: 100, y: 200 } }, created.annotation.revision);
+
+    const session = new ViewerSession(view as any, "test.pdf", store);
+    (view as any).app = { locale: "en" };
+    await session.attach();
+    session.reconcilePage(1);
+    await new Promise<void>((r) => setTimeout(r, 20));
+
+    const inlineCard = pages[0].el.querySelector<HTMLElement>(`.rm-inline-card-layer .rm-card[data-annotation-id="${created.annotation.id}"]`);
+    expect(inlineCard).toBeTruthy();
+    expect(inlineCard!.style.left).toBe("100px");
+    expect(inlineCard!.style.top).toBe("200px");
+    // not in a margin rail
+    expect(containerEl.querySelector(`.rm-page-card-rail .rm-card[data-annotation-id="${created.annotation.id}"]`)).toBeNull();
+    // a short same-page connector links the mark to the on-page card
+    expect(containerEl.querySelector(`g.rm-connector[data-annotation-id="${created.annotation.id}"]`)).toBeTruthy();
+    session.dispose();
+  });
+  it("free-drags a margin card onto the page and rebuilds it in the inline layer (on-page x)", async () => {
+    // B2 free drag: a margin rail card dragged onto the page (page-local x in
+    // [0, pageWidth]) commits an on-page position and rebuilds in the page's
+    // inline layer, leaving the margin rail. The drag layer is removed after.
+    const { view, pages, containerEl } = buildHostFixture({ fingerprint: "fp-a", numPages: 1, marginWidthPx: 200 });
+    Object.defineProperty(containerEl, "offsetWidth", { configurable: true, value: 1000 });
+    Object.defineProperty(containerEl, "getBoundingClientRect", { configurable: true, value: () => ({ left: 0, top: 0, width: 1000, height: 800, right: 1000, bottom: 800 } as DOMRect) });
+    Object.defineProperties(pages[0].el, { offsetWidth: { configurable: true, value: 400 }, offsetHeight: { configurable: true, value: 800 } });
+    Object.defineProperty(pages[0].el, "getBoundingClientRect", { configurable: true, value: () => ({ left: 300, top: 0, width: 400, height: 800, right: 700, bottom: 800 } as DOMRect) });
+    const store = makeStore();
+    const anchor = {
+      kind: "pdf-text" as const, version: 1 as const, pageNumber: 1,
+      quote: { exact: "drag onto page", normalization: "collapse-whitespace-v1" as const },
+      geometry: { space: "page-css-v1" as const, pageWidth: 400, pageHeight: 800, rotation: 0 as const, rects: [{ x: 10, y: 100, width: 50, height: 14 }] },
+    };
+    const created = store.create("test.pdf", { markStyle: "highlight", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c", anchor }, { pdfFingerprint: "fp-a", numPages: 1 });
+    if (!created.ok) throw new Error(created.reason);
+    const session = new ViewerSession(view as any, "test.pdf", store);
+    (view as any).app = { locale: "en" };
+    await session.attach();
+    await new Promise<void>((r) => setTimeout(r, 20));
+
+    const card = containerEl.querySelector<HTMLElement>(`.rm-card[data-annotation-id="${created.annotation.id}"]`)!;
+    expect(card.closest(".rm-page-card-rail")).toBeTruthy(); // starts in a margin rail
+    expect(card.style.width).toBe("240px"); // rail card width (responsive max for a wide margin)
+    const grip = card.querySelector<HTMLElement>(".rm-card-grip")!;
+    Object.defineProperties(card, {
+      offsetWidth: { configurable: true, value: 200 },
+      offsetHeight: { configurable: true, value: 40 },
+      getBoundingClientRect: { configurable: true, value: () => {
+        const left = parseFloat(card.style.left) || 0, top = parseFloat(card.style.top) || 0;
+        return { left, top, width: 200, height: 40, right: left + 200, bottom: top + 40 } as DOMRect;
+      } },
+    });
+    // Drag right by 380: startContainerX=12 -> 392 -> page-local x = 392-300 = 92 (in [0,400]).
+    grip.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 20, clientY: 110 }));
+    grip.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, button: 0, clientX: 400, clientY: 110 }));
+    grip.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, button: 0, clientX: 400, clientY: 110 }));
+    await new Promise<void>((r) => setTimeout(r, 30));
+
+    // Rebuilt in the page inline layer at x=92; gone from the margin rail.
+    const inlineCard = pages[0].el.querySelector<HTMLElement>(`.rm-inline-card-layer .rm-card[data-annotation-id="${created.annotation.id}"]`);
+    expect(inlineCard).toBeTruthy();
+    expect(inlineCard!.style.left).toBe("92px");
+    expect(inlineCard!.style.width).toBe("240px"); // on-page card keeps the same width (no shrink on drag)
+    expect(containerEl.querySelector(`.rm-page-card-rail .rm-card[data-annotation-id="${created.annotation.id}"]`)).toBeNull();
+    expect(store.byId("test.pdf", created.annotation.id)?.cardPosition?.x).toBe(92);
+    // drag layer removed after the reconcile.
+    expect(containerEl.querySelector(".rm-card-drag-layer")).toBeNull();
+    session.dispose();
+  });
+  it("renders an on-page card at the scaled position when zoom != 1 (x is page-local, zoom-stable)", async () => {
+    // §5.4: coordinate changes must cover scale other than 1. cardPosition.x is
+    // page-local unscaled; at scale 2 the card must render at x*scale (and the
+    // isOnPage test must use the unscaled page width so it still classifies as
+    // on-page). page 400x800 css at scale 2 -> 800x1600 px.
+    const { view, pages, containerEl } = buildHostFixture({ fingerprint: "fp-a", numPages: 1, marginWidthPx: 300, scale: 2 });
+    Object.defineProperty(containerEl, "offsetWidth", { configurable: true, value: 1200 });
+    Object.defineProperty(containerEl, "getBoundingClientRect", { configurable: true, value: () => ({ left: 0, top: 0, width: 1200, height: 1600, right: 1200, bottom: 1600 } as DOMRect) });
+    Object.defineProperties(pages[0].el, { offsetWidth: { configurable: true, value: 800 }, offsetHeight: { configurable: true, value: 1600 } });
+    Object.defineProperty(pages[0].el, "getBoundingClientRect", { configurable: true, value: () => ({ left: 200, top: 0, width: 800, height: 1600, right: 1000, bottom: 1600 } as DOMRect) });
+    const store = makeStore();
+    const anchor = {
+      kind: "pdf-text" as const, version: 1 as const, pageNumber: 1,
+      quote: { exact: "zoom stable", normalization: "collapse-whitespace-v1" as const },
+      geometry: { space: "page-css-v1" as const, pageWidth: 400, pageHeight: 800, rotation: 0 as const, rects: [{ x: 10, y: 100, width: 50, height: 14 }] },
+    };
+    const created = store.create("test.pdf", { markStyle: "highlight", colorId: "yellow", colorLabel: "Yellow", colorValue: "#fff15c", anchor }, { pdfFingerprint: "fp-a", numPages: 1 });
+    if (!created.ok) throw new Error(created.reason);
+    // on-page x=100, y=200 (page-local unscaled). At scale 2 -> left 200, top 400.
+    store.update("test.pdf", created.annotation.id, { cardPosition: { space: "page-css-v2", x: 100, y: 200 } }, created.annotation.revision);
+
+    const session = new ViewerSession(view as any, "test.pdf", store);
+    (view as any).app = { locale: "en" };
+    await session.attach();
+    session.reconcilePage(1);
+    await new Promise<void>((r) => setTimeout(r, 20));
+
+    const inlineCard = pages[0].el.querySelector<HTMLElement>(`.rm-inline-card-layer .rm-card[data-annotation-id="${created.annotation.id}"]`);
+    expect(inlineCard).toBeTruthy();
+    expect(inlineCard!.style.left).toBe("200px"); // x*scale = 100*2
+    expect(inlineCard!.style.top).toBe("400px");  // y*scale = 200*2
+    // width is the responsive rail-card width (container px), NOT CARD_MAX*scale:
+    // available left = 200-20 = 180 -> min(240, max(136, 180-24)) = 156.
+    expect(inlineCard!.style.width).toBe("156px");
+    session.dispose();
   });
   it("does not render an annotation whose anchor cannot be resolved (H-03)", async () => {
     const { view, pages } = buildHostFixture({ fingerprint: "fp-a", numPages: 1, marginWidthPx: 200 });

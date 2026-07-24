@@ -154,13 +154,12 @@ export class DurableAnnotationStore {
         return { ok: false, reason: "invalid displayMode" };
       }
     }
-    // This legacy v1 field deliberately has mixed coordinates: y is page-local
-    // scale-1 CSS, while x is viewer-container content px. Only y can be
-    // normalized durably against the annotation page. Current layout bounds,
-    // card width, and card height belong to the transient DOM projection.
-    // Explicit undefined still clears the whole position.
+    // Card position is page-local on both axes (`page-css-v2`): y is card top,
+    // x (optional) is card left; both scale with zoom and scroll with the page.
+    // Legacy v1 (x container-px) is migrated by sanitizeCardPosition. Explicit
+    // undefined clears the whole position (back to auto-layout).
     if (Object.prototype.hasOwnProperty.call(applied, "cardPosition") && applied.cardPosition !== undefined) {
-      const cardPosition = sanitizeCardPosition(applied.cardPosition, ann.anchor.geometry.pageHeight);
+      const cardPosition = sanitizeCardPosition(applied.cardPosition, ann.anchor.geometry.pageWidth, ann.anchor.geometry.pageHeight);
       if (!cardPosition) return { ok: false, reason: "invalid card position" };
       applied.cardPosition = cardPosition;
     }
